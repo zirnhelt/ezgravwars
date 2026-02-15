@@ -77,8 +77,13 @@ export class GameRoom {
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
 
+    const wasReconnect = this.sessions.has(playerId);
+
     this.state.acceptWebSocket(server, [String(playerId)]);
     this.sessions.set(playerId, server);
+
+    // Cancel cleanup alarm if someone connects
+    await this.state.storage.deleteAlarm();
 
     // Send current state
     server.send(JSON.stringify({
@@ -89,6 +94,14 @@ export class GameRoom {
       },
     }));
 
+    // Notify other player if this was a reconnect
+    if (wasReconnect) {
+      this.broadcast({
+        type: "player_reconnected",
+        data: { player: playerId },
+      });
+    }
+
     return new Response(null, { status: 101, webSocket: client });
   }
 
@@ -97,10 +110,23 @@ export class GameRoom {
 
     const msg = JSON.parse(message);
 
+    // Get player ID from WebSocket tags
+    const tags = this.state.getTags(ws);
+    const playerId = tags && tags.length > 0 ? parseInt(tags[0]) : null;
+
     switch (msg.type) {
       case "fire": {
         const { angle, power } = msg.data;
-        // TODO: validate it's actually this player's turn using ws tags
+
+        // Validate it's actually this player's turn
+        if (playerId !== this.game.turn) {
+          ws.send(JSON.stringify({
+            type: "error",
+            data: { message: "Not your turn" }
+          }));
+          return;
+        }
+
         // Broadcast to both players
         this.broadcast({
           type: "shot_fired",
@@ -111,6 +137,16 @@ export class GameRoom {
 
       case "report_result": {
         const { hit, hitWhat } = msg.data;
+
+        // Validate it's the active player reporting
+        if (playerId !== this.game.turn) {
+          ws.send(JSON.stringify({
+            type: "error",
+            data: { message: "Not your turn to report" }
+          }));
+          return;
+        }
+
         const opponent = this.game.turn === 1 ? 2 : 1;
 
         if (hit) {
@@ -152,6 +188,19 @@ export class GameRoom {
         });
         break;
       }
+    }
+
+    // Set alarm to clean up room after 1 hour of no connections
+    if (this.sessions.size === 0) {
+      const oneHour = 60 * 60 * 1000;
+      await this.state.storage.setAlarm(Date.now() + oneHour);
+    }
+  }
+
+  async alarm() {
+    // Clean up room if no one is connected
+    if (this.sessions.size === 0) {
+      await this.state.storage.deleteAll();
     }
   }
 

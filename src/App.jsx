@@ -40,6 +40,7 @@ export default function GravityWars({
   roomSeed = null,
   onFire = null,
   incomingShot = null,
+  onShotComplete = null,
 }) {
   const canvasRef = useRef(null);
   const frameRef = useRef(null);
@@ -143,6 +144,11 @@ export default function GravityWars({
         setShotHistory((prev) =>
           [{ player: shotPlayer, angle: shotAngle, power: shotPower, result: result.hitWhat }, ...prev].slice(0, MAX_SHOT_HISTORY)
         );
+
+        // Notify parent (for online mode to report result to server)
+        if (onShotComplete) {
+          onShotComplete(result);
+        }
 
         // Animate explosion then transition
         const explosionSim = simRef.current;
