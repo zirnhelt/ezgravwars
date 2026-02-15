@@ -16,10 +16,14 @@ function RoomRoute() {
   useEffect(() => {
     async function join() {
       try {
+        console.log(`[RoomRoute] Joining room ${roomId}...`);
         const data = await joinRoom(roomId);
-        setRoomData(data);
-        setLoading(false);
+        console.log(`[RoomRoute] Join successful:`, data);
+        console.log(`[RoomRoute] Navigating to /play/${data.roomId}/${data.playerId}/${data.seed}`);
+        // Navigate to the play route to ensure consistent flow for both players
+        navigate(`/play/${data.roomId}/${data.playerId}/${data.seed}`);
       } catch (err) {
+        console.error(`[RoomRoute] Join failed:`, err);
         setError(err.message);
         setLoading(false);
         setTimeout(() => navigate("/"), 3000);
@@ -71,12 +75,21 @@ function RoomRoute() {
     );
   }
 
+  // This should not be reached since we navigate after joining
+  // But keep as fallback
   return (
-    <MultiplayerApp
-      roomId={roomData.roomId}
-      playerId={roomData.playerId}
-      seed={roomData.seed}
-    />
+    <div style={{
+      background: "#04040a",
+      minHeight: "100vh",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      fontFamily: "'Courier New', monospace",
+      color: "#4a9eff",
+      fontSize: 18,
+    }}>
+      Redirecting to game...
+    </div>
   );
 }
 

@@ -17,10 +17,12 @@ export default function MultiplayerApp({ roomId, playerId, seed }) {
     switch (msg.type) {
       case "room_state": {
         // Initial state on connect/reconnect
+        console.log(`[Player ${playerId}] room_state received - status: ${msg.data.status}, turn: ${msg.data.turn}`);
         setGameStatus(msg.data.status);
         setTurn(msg.data.turn);
         setLevel(msg.data.level);
         setScores(msg.data.scores);
+        console.log(`[Player ${playerId}] State updated - gameStatus will be: ${msg.data.status}`);
         break;
       }
 
@@ -63,6 +65,9 @@ export default function MultiplayerApp({ roomId, playerId, seed }) {
   }, [playerId]);
 
   useEffect(() => {
+    console.log(`[Player ${playerId}] MultiplayerApp mounting - creating GameClient for room ${roomId}`);
+    console.log(`[Player ${playerId}] Initial gameStatus: ${gameStatus}`);
+
     const client = new GameClient(
       roomId,
       playerId,
@@ -74,6 +79,7 @@ export default function MultiplayerApp({ roomId, playerId, seed }) {
     client.connect();
 
     return () => {
+      console.log(`[Player ${playerId}] MultiplayerApp unmounting - disconnecting GameClient`);
       client.disconnect();
     };
   }, [roomId, playerId, handleMessage]);
