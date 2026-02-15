@@ -15,19 +15,34 @@ export default function Lobby({ onRoomReady }) {
   // Set up WebSocket when in waiting mode to listen for player_joined
   useEffect(() => {
     if (mode === "waiting" && roomId && playerId) {
+      console.log(`[Lobby Player ${playerId}] Connecting WebSocket...`);
       const ws = new WebSocket(`${WS_URL}/api/rooms/${roomId}/ws?player=${playerId}`);
+
+      ws.onopen = () => {
+        console.log(`[Lobby Player ${playerId}] WebSocket connected`);
+      };
 
       ws.onmessage = (event) => {
         try {
           const msg = JSON.parse(event.data);
+          console.log(`[Lobby Player ${playerId}] Received:`, msg.type, msg.data);
           if (msg.type === "player_joined") {
             // Second player joined! Start the game
+            console.log(`[Lobby Player ${playerId}] Player joined! Starting game...`);
             ws.close();
             onRoomReady(roomId, playerId, seed);
           }
         } catch (e) {
           console.error("Bad message:", e);
         }
+      };
+
+      ws.onerror = (error) => {
+        console.error(`[Lobby Player ${playerId}] WebSocket error:`, error);
+      };
+
+      ws.onclose = () => {
+        console.log(`[Lobby Player ${playerId}] WebSocket closed`);
       };
 
       wsRef.current = ws;

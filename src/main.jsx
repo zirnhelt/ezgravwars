@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import ReactDOM from "react-dom/client";
 import { BrowserRouter, Routes, Route, useParams, useNavigate } from "react-router-dom";
 import Lobby from "./Lobby.jsx";
@@ -83,10 +83,10 @@ function RoomRoute() {
 function LobbyRoute() {
   const navigate = useNavigate();
 
-  const handleRoomReady = (roomId, playerId, seed) => {
+  const handleRoomReady = useCallback((roomId, playerId, seed) => {
     // Navigate to the multiplayer app
     navigate(`/play/${roomId}/${playerId}/${seed}`);
-  };
+  }, [navigate]);
 
   return <Lobby onRoomReady={handleRoomReady} />;
 }
