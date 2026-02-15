@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { createRoom, joinRoom } from "./net/client.js";
+import { WS_URL } from "./config.js";
 
 export default function Lobby({ onRoomReady }) {
   const [mode, setMode] = useState("menu"); // menu | creating | joining | waiting
@@ -9,6 +10,35 @@ export default function Lobby({ onRoomReady }) {
   const [joinInput, setJoinInput] = useState("");
   const [error, setError] = useState(null);
   const [copied, setCopied] = useState(false);
+  const wsRef = useRef(null);
+
+  // Set up WebSocket when in waiting mode to listen for player_joined
+  useEffect(() => {
+    if (mode === "waiting" && roomId && playerId) {
+      const ws = new WebSocket(`${WS_URL}/api/rooms/${roomId}/ws?player=${playerId}`);
+
+      ws.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+          if (msg.type === "player_joined") {
+            // Second player joined! Start the game
+            ws.close();
+            onRoomReady(roomId, playerId, seed);
+          }
+        } catch (e) {
+          console.error("Bad message:", e);
+        }
+      };
+
+      wsRef.current = ws;
+
+      return () => {
+        if (wsRef.current) {
+          wsRef.current.close();
+        }
+      };
+    }
+  }, [mode, roomId, playerId, seed, onRoomReady]);
 
   const handleCreateRoom = async () => {
     setMode("creating");
@@ -18,8 +48,8 @@ export default function Lobby({ onRoomReady }) {
       setRoomId(data.roomId);
       setPlayerId(data.playerId);
       setSeed(data.seed);
-      // Connect to the room immediately so we can receive player_joined message
-      onRoomReady(data.roomId, data.playerId, data.seed);
+      // Show waiting screen with room link
+      setMode("waiting");
     } catch (err) {
       setError(`Failed to create room: ${err.message}`);
       setMode("menu");
