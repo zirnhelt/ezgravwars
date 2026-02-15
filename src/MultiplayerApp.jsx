@@ -139,6 +139,9 @@ export default function MultiplayerApp({ roomId, playerId, seed }) {
         onFire={handleFire}
         incomingShot={incomingShot}
         onShotComplete={handleShotComplete}
+        externalTurn={turn}
+        externalLevel={level}
+        externalScores={scores}
       />
     </div>
   );
