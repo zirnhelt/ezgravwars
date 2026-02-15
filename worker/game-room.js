@@ -73,9 +73,23 @@ export class GameRoom {
     const verified = await this.state.storage.get("game");
     console.log('[handleJoin] Verified game.status from storage:', verified?.status);
 
-    console.log('[handleJoin] Broadcasting player_joined to notify player 1');
-    // Notify player 1
+    console.log('[handleJoin] Broadcasting to all connected players');
+    // Send player_joined event
     this.broadcast({ type: "player_joined", data: { status: "playing" } });
+    // Also broadcast updated room_state to ensure all clients are in sync
+    // This helps if player_joined is missed or if clients need current state
+    this.broadcast({
+      type: "room_state",
+      data: {
+        seed: this.game.seed,
+        level: this.game.level,
+        scores: this.game.scores,
+        turn: this.game.turn,
+        players: this.game.players,
+        status: "playing",
+        shotHistory: this.game.shotHistory
+      }
+    });
 
     console.log('[handleJoin] Join complete, returning response');
     return Response.json({ roomId: this.state.id.toString(), playerId: 2, seed: this.game.seed });
