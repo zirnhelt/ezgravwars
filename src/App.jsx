@@ -305,7 +305,23 @@ export default function GravityWars({
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
 
+    let isVisible = !document.hidden;
+    const handleVisibilityChange = () => {
+      isVisible = !document.hidden;
+      if (isVisible && frameRef.current === null) {
+        // Resume animation when tab becomes visible
+        frameRef.current = requestAnimationFrame(draw);
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
     const draw = () => {
+      // Pause animation when tab is hidden to save CPU
+      if (!isVisible) {
+        frameRef.current = null;
+        return;
+      }
+
       timeRef.current += 0.016;
       const t = timeRef.current;
 
@@ -469,7 +485,10 @@ export default function GravityWars({
       frameRef.current = requestAnimationFrame(draw);
     };
     frameRef.current = requestAnimationFrame(draw);
-    return () => cancelAnimationFrame(frameRef.current);
+    return () => {
+      if (frameRef.current) cancelAnimationFrame(frameRef.current);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
   }, []);
 
   // ===================== UI =====================
