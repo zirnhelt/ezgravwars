@@ -32,6 +32,10 @@ export default function Lobby({ onRoomReady }) {
             msg.type === "player_joined" ||
             (msg.type === "room_state" && msg.data.status === "playing");
 
+          console.log(`[Lobby Player ${playerId}] shouldStart:`, shouldStart,
+            `| msg.type: ${msg.type}`,
+            `| status: ${msg.data?.status}`);
+
           if (shouldStart) {
             console.log(`[Lobby Player ${playerId}] Game is ready! Starting...`);
             ws.close();
