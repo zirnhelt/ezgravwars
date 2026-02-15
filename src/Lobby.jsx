@@ -92,7 +92,8 @@ export default function Lobby({ onRoomReady }) {
       setRoomId(data.roomId);
       setPlayerId(data.playerId);
       setSeed(data.seed);
-      onRoomReady(data.roomId, data.playerId, data.seed);
+      // Move to waiting mode so WebSocket can connect and listen for game ready
+      setMode("waiting");
     } catch (err) {
       setError(`Failed to join room: ${err.message}`);
       setMode("menu");
