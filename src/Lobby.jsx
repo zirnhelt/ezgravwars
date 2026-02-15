@@ -18,7 +18,8 @@ export default function Lobby({ onRoomReady }) {
       setRoomId(data.roomId);
       setPlayerId(data.playerId);
       setSeed(data.seed);
-      setMode("waiting");
+      // Connect to the room immediately so we can receive player_joined message
+      onRoomReady(data.roomId, data.playerId, data.seed);
     } catch (err) {
       setError(`Failed to create room: ${err.message}`);
       setMode("menu");
