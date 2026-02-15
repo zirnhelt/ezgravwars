@@ -1,139 +1,114 @@
 # Deployment Guide
 
-This project uses a **split deployment** architecture:
-- **Frontend**: GitHub Pages (static React app)
-- **Backend**: Cloudflare Workers (Durable Objects)
+This app uses **Cloudflare Pages** (frontend) + **Cloudflare Workers** (backend with Durable Objects).
 
-## Prerequisites
+## Initial Setup
 
-1. GitHub account with Pages enabled
-2. Cloudflare account (free tier works)
-3. Wrangler CLI installed: `npm install -g wrangler`
+### 1. Get Cloudflare Credentials
 
-## Step 1: Deploy Cloudflare Worker (Backend)
+You'll need:
+- **Cloudflare API Token**: https://dash.cloudflare.com/profile/api-tokens
+  - Click "Create Token"
+  - Use "Edit Cloudflare Workers" template
+  - Or create custom with permissions: `Workers Scripts:Edit`, `Workers Durable Objects:Edit`
 
-### 1.1 Login to Cloudflare
+- **Cloudflare Account ID**: https://dash.cloudflare.com
+  - Select your domain/account
+  - Find "Account ID" on the right sidebar
+
+### 2. Add GitHub Secrets
+
+Go to: `https://github.com/YOUR_USERNAME/ezgravwars/settings/secrets/actions`
+
+Add these secrets:
+- `CLOUDFLARE_API_TOKEN` - Your Cloudflare API token
+- `CLOUDFLARE_ACCOUNT_ID` - Your Cloudflare account ID
+- `VITE_API_URL` - Will be set after first Worker deployment (Step 4)
+
+### 3. Deploy Worker (First Time)
+
+From your local machine:
+
 ```bash
-wrangler login
-```
+# Log in to Cloudflare
+npx wrangler login
 
-### 1.2 Update wrangler.toml
-
-Edit `wrangler.toml` and update:
-```toml
-name = "gravity-wars-api"  # Your worker name
-```
-
-### 1.3 Deploy the Worker
-```bash
+# Deploy the Worker
 npm run worker:deploy
 ```
 
-This will output a URL like: `https://gravity-wars-api.YOUR_SUBDOMAIN.workers.dev`
-
-**Save this URL!** You'll need it for the frontend.
-
-### 1.4 (Optional) Add Custom Domain
-
-In Cloudflare Dashboard:
-1. Go to Workers & Pages → gravity-wars-api
-2. Click "Triggers" → "Add Custom Domain"
-3. Add your custom domain (e.g., `api.gravitywars.com`)
-
-## Step 2: Configure GitHub Pages (Frontend)
-
-### 2.1 Enable GitHub Pages
-
-1. Go to your GitHub repository
-2. Settings → Pages
-3. Source: **GitHub Actions**
-
-### 2.2 Add Worker URL as Secret
-
-1. Go to Settings → Secrets and variables → Actions
-2. Click "New repository secret"
-3. Name: `VITE_API_URL`
-4. Value: Your worker URL (e.g., `https://gravity-wars-api.YOUR_SUBDOMAIN.workers.dev`)
-
-### 2.3 Update config.js
-
-Edit `src/config.js` and replace the placeholder:
-```javascript
-export const API_URL = import.meta.env.VITE_API_URL ||
-  (import.meta.env.DEV ? 'http://localhost:8787' : 'https://gravity-wars-api.YOUR_SUBDOMAIN.workers.dev');
+You'll see output like:
+```
+Published gravity-wars-worker
+  https://gravity-wars-worker.YOUR-SUBDOMAIN.workers.dev
 ```
 
-### 2.4 Push to Main Branch
+**Copy this URL!** ☝️
 
-```bash
-git add .
-git commit -m "Configure production deployment"
-git push origin main
-```
+### 4. Set VITE_API_URL Secret
 
-GitHub Actions will automatically:
-1. Install dependencies
-2. Build the React app
-3. Deploy to GitHub Pages
+Go to: `https://github.com/YOUR_USERNAME/ezgravwars/settings/secrets/actions`
 
-## Step 3: Access Your Game
+Add or update:
+- Name: `VITE_API_URL`
+- Value: The Worker URL from Step 3 (e.g., `https://gravity-wars-worker.YOUR-SUBDOMAIN.workers.dev`)
 
-Your game will be available at:
-```
-https://YOUR_USERNAME.github.io/ezgravwars/
-```
+### 5. Trigger Cloudflare Pages Redeploy
+
+After setting the `VITE_API_URL` secret:
+
+1. Go to Cloudflare Dashboard → Pages → ezgravwars
+2. Click "Deployments" tab
+3. Click "Retry deployment" on the latest deployment
+
+OR push a commit to `main` branch to trigger auto-deploy.
+
+---
+
+## Automatic Deployments
+
+Once set up, deployments are automatic:
+
+- **Worker**: Auto-deploys on every push to `main` (if `worker/` files changed)
+- **Pages**: Auto-deploys on every push to `main` (configured in Cloudflare)
+
+---
 
 ## Local Development
 
-Both servers must run simultaneously:
-
 ```bash
-# Terminal 1: Frontend dev server
-npm run dev
-
-# Terminal 2: Worker dev server (with local Durable Objects)
+# Terminal 1: Run Worker locally
 npm run worker:dev
+
+# Terminal 2: Run frontend
+npm run dev
 ```
 
-Then open `http://localhost:5173`
+Frontend will use `http://localhost:8787` for the Worker in dev mode.
+
+---
+
+## Testing the Deployment
+
+1. Open your Cloudflare Pages URL (e.g., `https://ezgravwars.pages.dev`)
+2. Click "CREATE GAME"
+3. Copy the room link
+4. Open in another browser/tab
+5. Both players should see the game start! 🎮
+
+---
 
 ## Troubleshooting
 
-### CORS Issues
-If you get CORS errors, the worker needs CORS headers. They're already added in `worker/index.js`.
+### "Failed to create room" error
+- Check browser console for the actual error
+- Verify `VITE_API_URL` is set correctly in GitHub Secrets
+- Verify Worker is deployed and accessible
 
-### WebSocket Connection Failed
-1. Check that `VITE_API_URL` secret is set correctly
-2. Verify the worker URL is accessible
-3. Make sure you're using `https://` not `http://`
+### Pages shows waiting forever
+- Check if the Worker URL in config.js is correct
+- Open browser DevTools → Network tab
+- Look for failed requests to the Worker
 
-### GitHub Pages 404
-1. Wait 2-3 minutes after deployment
-2. Check Actions tab for build errors
-3. Verify Pages is enabled in Settings
-
-### Worker Not Updating
-```bash
-# Clear cache and redeploy
-wrangler deploy --no-bundle
-```
-
-## Cost Estimate
-
-- **GitHub Pages**: Free
-- **Cloudflare Workers**: Free tier includes:
-  - 100,000 requests/day
-  - 10ms CPU time per request
-  - Sufficient for ~1000 concurrent games
-
-## Custom Domain (Optional)
-
-### Frontend
-1. In GitHub repo settings → Pages
-2. Add custom domain (e.g., `gravitywars.com`)
-3. Configure DNS with CNAME to `YOUR_USERNAME.github.io`
-
-### Backend
-1. In Cloudflare Workers dashboard
-2. Triggers → Custom Domain
-3. Add subdomain (e.g., `api.gravitywars.com`)
+### CORS errors
+- Make sure Worker code has CORS headers (already included in `worker/index.js`)
