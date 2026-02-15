@@ -62,16 +62,22 @@ export class GameRoom {
       return new Response("Room full", { status: 409 });
     }
 
+    console.log('[handleJoin] BEFORE update - game.status:', this.game.status);
     console.log('[handleJoin] Adding player 2, setting status to playing');
     this.game.players[2] = "waiting";
     this.game.status = "playing";
+    console.log('[handleJoin] AFTER update - game.status:', this.game.status);
+    console.log('[handleJoin] Saving to storage...');
     await this.state.storage.put("game", this.game);
+    console.log('[handleJoin] Saved to storage. Verifying...');
+    const verified = await this.state.storage.get("game");
+    console.log('[handleJoin] Verified game.status from storage:', verified?.status);
 
     console.log('[handleJoin] Broadcasting player_joined to notify player 1');
     // Notify player 1
     this.broadcast({ type: "player_joined", data: { status: "playing" } });
 
-    console.log('[handleJoin] Join complete');
+    console.log('[handleJoin] Join complete, returning response');
     return Response.json({ roomId: this.state.id.toString(), playerId: 2, seed: this.game.seed });
   }
 
