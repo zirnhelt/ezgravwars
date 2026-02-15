@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { GameClient } from "./net/client.js";
 import GravityWars from "./App.jsx";
 
@@ -11,24 +11,8 @@ export default function MultiplayerApp({ roomId, playerId, seed }) {
   const [scores, setScores] = useState([0, 0]);
   const clientRef = useRef(null);
 
-  useEffect(() => {
-    const client = new GameClient(
-      roomId,
-      playerId,
-      handleMessage,
-      setConnectionStatus
-    );
-
-    clientRef.current = client;
-    client.connect();
-
-    return () => {
-      client.disconnect();
-    };
-  }, [roomId, playerId]);
-
-  const handleMessage = (msg) => {
-    console.log("Received message:", msg.type, msg.data);
+  const handleMessage = useCallback((msg) => {
+    console.log(`[Player ${playerId}] Received message:`, msg.type, msg.data);
 
     switch (msg.type) {
       case "room_state": {
@@ -76,7 +60,23 @@ export default function MultiplayerApp({ roomId, playerId, seed }) {
       default:
         console.warn("Unknown message type:", msg.type);
     }
-  };
+  }, [playerId]);
+
+  useEffect(() => {
+    const client = new GameClient(
+      roomId,
+      playerId,
+      handleMessage,
+      setConnectionStatus
+    );
+
+    clientRef.current = client;
+    client.connect();
+
+    return () => {
+      client.disconnect();
+    };
+  }, [roomId, playerId, handleMessage]);
 
   const handleFire = (angle, power) => {
     if (clientRef.current) {
