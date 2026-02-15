@@ -31,6 +31,7 @@ function darken(color, amount) {
 //   roomSeed: number
 //   onFire: (angle, power) => void  — called instead of local sim in online mode
 //   incomingShot: { angle, power, player } | null — set by parent when opponent fires
+//   externalTurn, externalLevel, externalScores: controlled state in online mode
 
 const STAR_SEED = 42424242; // Fixed for consistent starfield
 
@@ -41,6 +42,9 @@ export default function GravityWars({
   onFire = null,
   incomingShot = null,
   onShotComplete = null,
+  externalTurn = null,
+  externalLevel = null,
+  externalScores = null,
 }) {
   const canvasRef = useRef(null);
   const frameRef = useRef(null);
@@ -51,12 +55,22 @@ export default function GravityWars({
   const [seed] = useState(() => roomSeed ?? Math.floor(Math.random() * 2147483647));
   const [stars] = useState(() => generateStars(STAR_SEED, 300));
 
-  const [turn, setTurn] = useState(1);
+  // In online mode, use external controlled state; in local mode, use internal state
+  const [internalTurn, setInternalTurn] = useState(1);
+  const [internalScores, setInternalScores] = useState([0, 0]);
+  const [internalLevel, setInternalLevel] = useState(1);
+
+  const turn = mode === "online" ? (externalTurn ?? 1) : internalTurn;
+  const scores = mode === "online" ? (externalScores ?? [0, 0]) : internalScores;
+  const level = mode === "online" ? (externalLevel ?? 1) : internalLevel;
+
+  const setTurn = mode === "online" ? (() => {}) : setInternalTurn;
+  const setScores = mode === "online" ? (() => {}) : setInternalScores;
+  const setLevel = mode === "online" ? (() => {}) : setInternalLevel;
+
   const [angle, setAngle] = useState(0);
   const [power, setPower] = useState(50);
   const [firing, setFiring] = useState(false);
-  const [scores, setScores] = useState([0, 0]);
-  const [level, setLevel] = useState(1);
   const [planets, setPlanets] = useState(() => generateLevel(seed, 1));
   const [message, setMessage] = useState(
     mode === "local" ? "Player 1 — aim and fire!" : "Waiting for game to start..."
@@ -65,6 +79,26 @@ export default function GravityWars({
   const [allTrails, setAllTrails] = useState([]);
   const allTrailsRef = useRef([]);
   useEffect(() => { allTrailsRef.current = allTrails; }, [allTrails]);
+
+  // In online mode, regenerate planets when level changes from server
+  useEffect(() => {
+    if (mode === "online" && level > 0) {
+      setPlanets(generateLevel(seed, level));
+      setAllTrails([]);
+    }
+  }, [mode, level, seed]);
+
+  // In online mode, update message when turn changes
+  useEffect(() => {
+    if (mode === "online" && !firing) {
+      const isMyTurn = turn === myPlayerId;
+      setMessage(
+        isMyTurn
+          ? `Level ${level} — Your turn!`
+          : `Level ${level} — Opponent's turn...`
+      );
+    }
+  }, [mode, turn, myPlayerId, level, firing]);
 
   // Refs for values needed in callbacks/draw loop
   const planetsRef = useRef(planets);
