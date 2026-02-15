@@ -26,9 +26,14 @@ export default function Lobby({ onRoomReady }) {
         try {
           const msg = JSON.parse(event.data);
           console.log(`[Lobby Player ${playerId}] Received:`, msg.type, msg.data);
-          if (msg.type === "player_joined") {
-            // Second player joined! Start the game
-            console.log(`[Lobby Player ${playerId}] Player joined! Starting game...`);
+
+          // Check if game should start (either from player_joined broadcast or room_state with status=playing)
+          const shouldStart =
+            msg.type === "player_joined" ||
+            (msg.type === "room_state" && msg.data.status === "playing");
+
+          if (shouldStart) {
+            console.log(`[Lobby Player ${playerId}] Game is ready! Starting...`);
             ws.close();
             onRoomReady(roomId, playerId, seed);
           }
