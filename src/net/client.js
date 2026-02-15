@@ -1,6 +1,8 @@
 // WebSocket client for multiplayer room communication.
 // Handles connection, reconnection, and message routing.
 
+import { API_URL, WS_URL } from '../config.js';
+
 const RECONNECT_DELAYS = [500, 1000, 2000, 4000, 8000];
 
 export class GameClient {
@@ -15,8 +17,7 @@ export class GameClient {
   }
 
   connect() {
-    const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const url = `${proto}//${window.location.host}/api/rooms/${this.roomId}/ws?player=${this.playerId}`;
+    const url = `${WS_URL}/api/rooms/${this.roomId}/ws?player=${this.playerId}`;
 
     this.onStatusChange("connecting");
     this.ws = new WebSocket(url);
@@ -83,7 +84,7 @@ export class GameClient {
 
 // --- HTTP helpers for room management ---
 
-const API_BASE = "/api/rooms";
+const API_BASE = `${API_URL}/api/rooms`;
 
 export async function createRoom() {
   const res = await fetch(API_BASE, { method: "POST" });

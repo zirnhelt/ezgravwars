@@ -29,51 +29,19 @@ wrangler.toml          # Cloudflare Workers config
 ARCHITECTURE.md        # Full architecture/protocol doc
 ```
 
-## What's Done
+## Features
 
-- [x] Game component extracted into shared modules
-- [x] Seeded PRNG (mulberry32) for deterministic level gen
-- [x] Physics engine separated, with both sync (`simulateShot`) and async (`animateShot`) modes
-- [x] Component supports `mode="local"` (hot-seat) and `mode="online"` props
-- [x] Online mode: controls disabled when not your turn, labels show YOU/OPP
-- [x] WebSocket client wrapper with reconnection
-- [x] Durable Object skeleton with room create/join/WS handling
-- [x] Worker routing for /api/rooms endpoints
-- [x] Default aim uses seeded RNG (same offset on both clients)
-
-## What Needs Building
-
-### 1. Lobby/Router UI
-- Landing page with "Create Game" and "Join Game" options
-- Route: `/room/:roomId` auto-joins and connects
-- Waiting screen: "Share this link..." with copy button
-- Connection status indicator
-- Use React Router or simple hash-based routing
-
-### 2. App Wrapper / Multiplayer Glue
-- Parent component that manages room lifecycle:
-  - Creates room → gets roomId + seed
-  - Connects WebSocket via `GameClient`
-  - Passes `incomingShot` prop to game when opponent fires
-  - Passes `onFire` callback that sends to server
-- Handle `room_state`, `shot_fired`, `player_joined`, `player_disconnected` messages
-
-### 3. Durable Object Completion
-- `game-room.js` has the skeleton. Needs:
-  - Turn validation (check WS tags to confirm correct player)
-  - Room expiry via DO alarm (clean up after 1hr idle)
-  - Handle reconnection (send full state on reconnect)
-  - Error handling for edge cases
-
-### 4. Vite Setup
-- `npm create vite@latest . -- --template react` (in this directory)
-- Add `base: '/gravity-wars/'` to vite.config.js for GitHub Pages
-- Or configure for Cloudflare Pages deployment
-
-### 5. Deployment
-- Option A: Pages + separate Worker (`wrangler deploy`)
-- Option B: Pages Functions (move worker code into `functions/api/`)
-- Set up custom domain if desired
+- [x] Game component with deterministic physics
+- [x] Seeded PRNG (mulberry32) for deterministic level generation
+- [x] Physics engine with both sync and async simulation modes
+- [x] Local 2-player hot-seat mode
+- [x] Online multiplayer with turn-based gameplay
+- [x] WebSocket client with automatic reconnection
+- [x] Lobby UI for creating and joining games
+- [x] Shareable room links with copy-to-clipboard
+- [x] Durable Objects for persistent game state
+- [x] Turn validation and room cleanup
+- [x] GitHub Pages deployment support
 
 ## Key Design Notes
 
@@ -106,8 +74,40 @@ Both clients MUST produce identical simulations. This means:
 ```
 
 ## Local Development
+
+Both servers must run simultaneously:
+
 ```bash
+# Install dependencies
 npm install
-npm run dev          # Vite dev server (local 2P mode)
-wrangler dev         # Worker + DO dev server (multiplayer)
+
+# Terminal 1: Frontend dev server
+npm run dev
+
+# Terminal 2: Worker dev server (with local Durable Objects)
+npm run worker:dev
 ```
+
+Then open `http://localhost:5173`
+
+## Deployment
+
+See [DEPLOYMENT.md](./DEPLOYMENT.md) for detailed deployment instructions.
+
+### Quick Start
+
+1. **Deploy Backend (Cloudflare Workers)**
+   ```bash
+   wrangler login
+   npm run worker:deploy
+   ```
+   Save the output URL (e.g., `https://gravity-wars-api.YOUR_SUBDOMAIN.workers.dev`)
+
+2. **Configure Frontend**
+   - Add worker URL as GitHub secret: `VITE_API_URL`
+   - Update `src/config.js` with your worker URL
+
+3. **Deploy Frontend (GitHub Pages)**
+   - Enable GitHub Pages in repository settings (Source: GitHub Actions)
+   - Push to main branch
+   - Access at `https://YOUR_USERNAME.github.io/ezgravwars/`
