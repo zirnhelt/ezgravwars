@@ -16,10 +16,13 @@ function RoomRoute() {
   useEffect(() => {
     async function join() {
       try {
+        console.log(`[RoomRoute] Joining room ${roomId}...`);
         const data = await joinRoom(roomId);
+        console.log(`[RoomRoute] Join successful:`, data);
         setRoomData(data);
         setLoading(false);
       } catch (err) {
+        console.error(`[RoomRoute] Join failed:`, err);
         setError(err.message);
         setLoading(false);
         setTimeout(() => navigate("/"), 3000);

@@ -81,6 +81,12 @@ export class GameRoom {
     const url = new URL(request.url);
     const playerId = parseInt(url.searchParams.get("player"));
     console.log(`[handleWebSocket] Player ${playerId} connecting`);
+    console.log(`[handleWebSocket] this.game exists: ${!!this.game}, status: ${this.game?.status}`);
+
+    if (!this.game) {
+      console.error(`[handleWebSocket] Game not found in storage!`);
+      return new Response("Room not found", { status: 404 });
+    }
 
     if (playerId !== 1 && playerId !== 2) {
       console.log(`[handleWebSocket] Invalid player ID: ${playerId}`);
@@ -108,7 +114,9 @@ export class GameRoom {
         playerId,
       },
     };
-    console.log(`[handleWebSocket] Sending room_state to player ${playerId}, status: ${this.game.status}`);
+    console.log(`[handleWebSocket] Preparing room_state for player ${playerId}`);
+    console.log(`[handleWebSocket] Game object:`, JSON.stringify(this.game, null, 2));
+    console.log(`[handleWebSocket] room_state data:`, JSON.stringify(currentState.data, null, 2));
     server.send(JSON.stringify(currentState));
 
     // Notify other player if this was a reconnect
