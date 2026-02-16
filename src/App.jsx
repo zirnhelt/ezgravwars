@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   CANVAS_W, CANVAS_H, EXPLOSION_DURATION, MAX_SHOT_HISTORY,
   MIN_POWER, MAX_POWER, AIM_OFFSET_MIN, AIM_OFFSET_MAX,
@@ -46,6 +47,7 @@ export default function GravityWars({
   externalLevel = null,
   externalScores = null,
 }) {
+  const navigate = useNavigate();
   const canvasRef = useRef(null);
   const frameRef = useRef(null);
   const simRef = useRef(null);
@@ -556,10 +558,16 @@ export default function GravityWars({
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
             <span style={{ fontSize: 9, color: "#383838" }}>Arrows/WASD aim · Shift=fine · Space=fire</span>
             {mode === "local" && (
-              <button onClick={newGame} style={{
-                background: "none", border: "1px solid #222", color: "#555", padding: "2px 10px",
-                borderRadius: 3, fontFamily: "'Courier New', monospace", fontSize: 9, cursor: "pointer",
-              }}>NEW GAME</button>
+              <>
+                <button onClick={newGame} style={{
+                  background: "none", border: "1px solid #222", color: "#555", padding: "2px 10px",
+                  borderRadius: 3, fontFamily: "'Courier New', monospace", fontSize: 9, cursor: "pointer",
+                }}>NEW GAME</button>
+                <button onClick={() => navigate("/")} style={{
+                  background: "none", border: "1px solid #222", color: "#555", padding: "2px 10px",
+                  borderRadius: 3, fontFamily: "'Courier New', monospace", fontSize: 9, cursor: "pointer",
+                }}>MENU</button>
+              </>
             )}
           </div>
         </div>
