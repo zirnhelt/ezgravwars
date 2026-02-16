@@ -1,8 +1,10 @@
 import { useState, useEffect, useRef } from "react";
+import { useNavigate } from "react-router-dom";
 import { createRoom, joinRoom } from "./net/client.js";
 import { WS_URL } from "./config.js";
 
 export default function Lobby({ onRoomReady }) {
+  const navigate = useNavigate();
   const [mode, setMode] = useState("menu"); // menu | creating | joining | waiting
   const [roomId, setRoomId] = useState("");
   const [playerId, setPlayerId] = useState(null);
@@ -224,6 +226,35 @@ export default function Lobby({ onRoomReady }) {
         {mode === "menu" && (
           <>
             <button
+              onClick={() => navigate("/local")}
+              style={{
+                background: "#6eff6a",
+                color: "#000",
+                border: "none",
+                padding: "15px 50px",
+                borderRadius: 4,
+                fontFamily: "'Courier New', monospace",
+                fontSize: 16,
+                fontWeight: "bold",
+                cursor: "pointer",
+                width: "100%",
+                marginBottom: 20,
+                letterSpacing: 2,
+              }}
+            >
+              LOCAL GAME (2P)
+            </button>
+
+            <div style={{
+              margin: "20px 0 15px 0",
+              color: "#333",
+              fontSize: 11,
+              letterSpacing: 1,
+            }}>
+              ── ONLINE MULTIPLAYER ──
+            </div>
+
+            <button
               onClick={handleCreateRoom}
               style={{
                 background: "#4a9eff",
@@ -244,7 +275,7 @@ export default function Lobby({ onRoomReady }) {
             </button>
 
             <div style={{
-              margin: "30px 0",
+              margin: "15px 0",
               color: "#333",
               fontSize: 12,
               letterSpacing: 1,
