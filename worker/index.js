@@ -4,21 +4,33 @@
 
 export { GameRoom } from "./game-room.js";
 
-// CORS headers helper
-function corsHeaders(origin) {
+// CORS origin check — set ALLOWED_ORIGIN env var in production (wrangler secret).
+// In dev (no env var set) any origin is allowed for local convenience.
+function getAllowedOrigin(origin, env) {
+  const configured = env?.ALLOWED_ORIGIN;
+  if (!configured) return origin; // dev: reflect any origin
+  return origin === configured ? origin : null;
+}
+
+function corsHeaders(origin, env) {
+  const allowed = getAllowedOrigin(origin, env);
   return {
-    'Access-Control-Allow-Origin': origin || '*',
+    'Access-Control-Allow-Origin': allowed ?? 'null',
     'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type',
   };
 }
 
-// Add CORS headers to response
-function addCorsHeaders(response, origin) {
+const SECURITY_HEADERS = {
+  'X-Content-Type-Options': 'nosniff',
+  'X-Frame-Options': 'DENY',
+  'Referrer-Policy': 'strict-origin-when-cross-origin',
+};
+
+function addResponseHeaders(response, origin, env) {
   const newHeaders = new Headers(response.headers);
-  const cors = corsHeaders(origin);
-  Object.entries(cors).forEach(([key, value]) => {
-    newHeaders.set(key, value);
+  Object.entries({ ...corsHeaders(origin, env), ...SECURITY_HEADERS }).forEach(([k, v]) => {
+    newHeaders.set(k, v);
   });
   return new Response(response.body, {
     status: response.status,
@@ -35,7 +47,7 @@ export default {
     // Handle CORS preflight
     if (request.method === 'OPTIONS') {
       return new Response(null, {
-        headers: corsHeaders(origin),
+        headers: { ...corsHeaders(origin, env), ...SECURITY_HEADERS },
       });
     }
 
@@ -43,9 +55,8 @@ export default {
     if (request.method === "POST" && url.pathname === "/api/rooms") {
       const id = env.GAME_ROOMS.newUniqueId();
       const stub = env.GAME_ROOMS.get(id);
-      // Forward with /create path
       const response = await stub.fetch(new Request(url.origin + "/create", { method: "POST" }));
-      return addCorsHeaders(response, origin);
+      return addResponseHeaders(response, origin, env);
     }
 
     // POST /api/rooms/:id/join
@@ -54,7 +65,7 @@ export default {
       const id = env.GAME_ROOMS.idFromString(joinMatch[1]);
       const stub = env.GAME_ROOMS.get(id);
       const response = await stub.fetch(new Request(url.origin + "/join", { method: "POST" }));
-      return addCorsHeaders(response, origin);
+      return addResponseHeaders(response, origin, env);
     }
 
     // GET /api/rooms/:id/ws — WebSocket upgrade
@@ -62,14 +73,13 @@ export default {
     if (wsMatch) {
       const id = env.GAME_ROOMS.idFromString(wsMatch[1]);
       const stub = env.GAME_ROOMS.get(id);
-      // Forward the full URL (with query params for player id)
-      // Note: WebSocket upgrades don't need CORS headers
+      // WebSocket upgrades don't use CORS but do get security headers via the upgrade response
       return stub.fetch(request);
     }
 
     return new Response("Not found", {
       status: 404,
-      headers: corsHeaders(origin),
+      headers: { ...corsHeaders(origin, env), ...SECURITY_HEADERS },
     });
   },
 };

@@ -2,6 +2,10 @@
 // Manages a single game room: player connections, turn validation, state sync.
 // Does NOT run physics — clients simulate deterministically from shared inputs.
 
+const MIN_POWER = 20;
+const MAX_POWER = 100;
+const VALID_HIT_RESULTS = new Set(["HIT!", "lost", "self", "planet"]);
+
 export class GameRoom {
   constructor(state, env) {
     this.state = state;
@@ -36,7 +40,11 @@ export class GameRoom {
   }
 
   async handleCreate(request) {
-    const seed = Math.floor(Math.random() * 2147483647);
+    // Use cryptographically secure random seed
+    const buf = new Uint32Array(1);
+    crypto.getRandomValues(buf);
+    const seed = buf[0] % 2147483647;
+
     this.game = {
       seed,
       level: 1,
@@ -51,33 +59,20 @@ export class GameRoom {
   }
 
   async handleJoin(request) {
-    console.log('[handleJoin] Player 2 joining room');
     if (!this.game) await this.initialize();
     if (!this.game) {
-      console.log('[handleJoin] Room not found');
       return new Response("Room not found", { status: 404 });
     }
     if (this.game.players[2]) {
-      console.log('[handleJoin] Room full');
       return new Response("Room full", { status: 409 });
     }
 
-    console.log('[handleJoin] BEFORE update - game.status:', this.game.status);
-    console.log('[handleJoin] Adding player 2, setting status to playing');
     this.game.players[2] = "waiting";
     this.game.status = "playing";
-    console.log('[handleJoin] AFTER update - game.status:', this.game.status);
-    console.log('[handleJoin] Saving to storage...');
     await this.state.storage.put("game", this.game);
-    console.log('[handleJoin] Saved to storage. Verifying...');
-    const verified = await this.state.storage.get("game");
-    console.log('[handleJoin] Verified game.status from storage:', verified?.status);
 
-    console.log('[handleJoin] Broadcasting player_joined to notify player 1');
-    // Notify player 1
     this.broadcast({ type: "player_joined", data: { status: "playing" } });
 
-    console.log('[handleJoin] Join complete, returning response');
     return Response.json({ roomId: this.state.id.toString(), playerId: 2, seed: this.game.seed });
   }
 
@@ -86,16 +81,12 @@ export class GameRoom {
 
     const url = new URL(request.url);
     const playerId = parseInt(url.searchParams.get("player"));
-    console.log(`[handleWebSocket] Player ${playerId} connecting`);
-    console.log(`[handleWebSocket] this.game exists: ${!!this.game}, status: ${this.game?.status}`);
 
     if (!this.game) {
-      console.error(`[handleWebSocket] Game not found in storage!`);
       return new Response("Room not found", { status: 404 });
     }
 
     if (playerId !== 1 && playerId !== 2) {
-      console.log(`[handleWebSocket] Invalid player ID: ${playerId}`);
       return new Response("Invalid player", { status: 400 });
     }
 
@@ -103,11 +94,9 @@ export class GameRoom {
     const [client, server] = Object.values(pair);
 
     const wasReconnect = this.sessions.has(playerId);
-    console.log(`[handleWebSocket] Player ${playerId} wasReconnect: ${wasReconnect}`);
 
     this.state.acceptWebSocket(server, [String(playerId)]);
     this.sessions.set(playerId, server);
-    console.log(`[handleWebSocket] Player ${playerId} added to sessions. Total sessions: ${this.sessions.size}`);
 
     // Cancel cleanup alarm if someone connects
     await this.state.storage.deleteAlarm();
@@ -120,9 +109,6 @@ export class GameRoom {
         playerId,
       },
     };
-    console.log(`[handleWebSocket] Preparing room_state for player ${playerId}`);
-    console.log(`[handleWebSocket] Game object:`, JSON.stringify(this.game, null, 2));
-    console.log(`[handleWebSocket] room_state data:`, JSON.stringify(currentState.data, null, 2));
     server.send(JSON.stringify(currentState));
 
     // Notify other player if this was a reconnect
@@ -133,14 +119,19 @@ export class GameRoom {
       });
     }
 
-    console.log(`[handleWebSocket] Player ${playerId} WebSocket setup complete`);
     return new Response(null, { status: 101, webSocket: client });
   }
 
   async webSocketMessage(ws, message) {
     if (!this.game) await this.initialize();
 
-    const msg = JSON.parse(message);
+    let msg;
+    try {
+      msg = JSON.parse(message);
+    } catch (e) {
+      ws.send(JSON.stringify({ type: "error", data: { message: "Invalid message format" } }));
+      return;
+    }
 
     // Get player ID from WebSocket tags
     const tags = this.state.getTags(ws);
@@ -148,7 +139,16 @@ export class GameRoom {
 
     switch (msg.type) {
       case "fire": {
-        const { angle, power } = msg.data;
+        const { angle, power } = msg.data ?? {};
+
+        // Validate shot parameters
+        if (
+          !Number.isInteger(angle) || angle < -360 || angle > 360 ||
+          !Number.isInteger(power) || power < MIN_POWER || power > MAX_POWER
+        ) {
+          ws.send(JSON.stringify({ type: "error", data: { message: "Invalid shot parameters" } }));
+          return;
+        }
 
         // Validate it's actually this player's turn
         if (playerId !== this.game.turn) {
@@ -168,7 +168,13 @@ export class GameRoom {
       }
 
       case "report_result": {
-        const { hit, hitWhat } = msg.data;
+        const { hit, hitWhat } = msg.data ?? {};
+
+        // Validate result parameters
+        if (typeof hit !== "boolean" || !VALID_HIT_RESULTS.has(hitWhat)) {
+          ws.send(JSON.stringify({ type: "error", data: { message: "Invalid result parameters" } }));
+          return;
+        }
 
         // Validate it's the active player reporting
         if (playerId !== this.game.turn) {
@@ -237,25 +243,13 @@ export class GameRoom {
   }
 
   broadcast(msg) {
-    console.log(`[Broadcast] Broadcasting ${msg.type} to ${this.sessions.size} sessions`);
-    console.log(`[Broadcast] Session player IDs:`, Array.from(this.sessions.keys()));
-
     const data = JSON.stringify(msg);
-    let successCount = 0;
-    let failCount = 0;
-
     for (const [playerId, ws] of this.sessions.entries()) {
       try {
-        console.log(`[Broadcast] Sending to player ${playerId}, readyState: ${ws.readyState}`);
         ws.send(data);
-        successCount++;
-        console.log(`[Broadcast] Successfully sent to player ${playerId}`);
       } catch (e) {
-        failCount++;
         console.error(`[Broadcast] Failed to send to player ${playerId}:`, e.message);
       }
     }
-
-    console.log(`[Broadcast] Complete: ${successCount} succeeded, ${failCount} failed`);
   }
 }
