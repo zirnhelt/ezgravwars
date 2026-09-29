@@ -89,6 +89,8 @@ button, input { font: inherit; color: inherit; }
     var(--bg);
   overflow: hidden;
   transition: background 0.6s;
+  /* viewport-fit=cover draws under the notch / home bar; keep the UI clear of them */
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
 }
 
 .gw-top {
@@ -421,6 +423,7 @@ button, input { font: inherit; color: inherit; }
   display: grid;
   place-items: center;
   overflow: hidden;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
 }
 
 .attract {
@@ -705,7 +708,7 @@ button, input { font: inherit; color: inherit; }
 .toast {
   position: fixed;
   left: 50%;
-  bottom: 22px;
+  bottom: calc(22px + env(safe-area-inset-bottom));
   transform: translateX(-50%);
   z-index: 60;
   max-width: min(520px, calc(100% - 32px));
@@ -723,7 +726,7 @@ button, input { font: inherit; color: inherit; }
 
 .net-pill {
   position: fixed;
-  top: 12px;
+  top: calc(12px + env(safe-area-inset-top));
   left: 50%;
   transform: translateX(-50%);
   z-index: 50;
