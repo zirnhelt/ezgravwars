@@ -2,6 +2,7 @@ import {
   CANVAS_W, CANVAS_H, MIN_PLANET_SPACING,
   PLAYER_RADIUS_MIN, PLAYER_RADIUS_MAX, PLAYER_MASS_MIN, PLAYER_MASS_MAX,
   NEUTRAL_RADIUS_MIN, NEUTRAL_RADIUS_MAX, NEUTRAL_MASS_MIN, NEUTRAL_MASS_MAX,
+  BLACK_HOLE_RADIUS_MIN, BLACK_HOLE_RADIUS_MAX, BLACK_HOLE_MASS_MIN, BLACK_HOLE_MASS_MAX,
 } from "./constants.js";
 
 // --- Seeded PRNG (mulberry32) ---
@@ -122,7 +123,31 @@ export function generateLevel(seed, levelNum) {
     if (tries < 100) planets.push(np);
   }
 
+  addBlackHole(planets, seed, levelNum);
   return planets;
+}
+
+// From level 3 on, a neutral planet may collapse into a black hole: tiny,
+// dense, and a vicious slingshot. Uses its own RNG stream so the rest of the
+// layout is identical to what the level would otherwise be.
+function addBlackHole(planets, seed, levelNum) {
+  if (levelNum < 3) return;
+  const neutrals = planets.map((p, i) => (p.player === 0 ? i : -1)).filter((i) => i >= 0);
+  if (neutrals.length === 0) return;
+  const rand = createRng((seed ^ 0x5bd1e995) + levelNum * 7919);
+  const chance = Math.min(0.3 + (levelNum - 3) * 0.08, 0.7);
+  if (rand() >= chance) return;
+  const idx = neutrals[Math.floor(rand() * neutrals.length)];
+  const p = planets[idx];
+  planets[idx] = {
+    x: p.x,
+    y: p.y,
+    radius: rng(rand, BLACK_HOLE_RADIUS_MIN, BLACK_HOLE_RADIUS_MAX),
+    mass: rng(rand, BLACK_HOLE_MASS_MIN, BLACK_HOLE_MASS_MAX),
+    color: "#000",
+    player: 0,
+    kind: "blackhole",
+  };
 }
 
 // --- Starfield (seeded, generated once per session) ---
