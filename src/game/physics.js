@@ -23,6 +23,13 @@ export function wrappedDelta(fx, fy, tx, ty) {
   return { dx, dy };
 }
 
+// Keep angles in (-180, 180] so sliders, readouts and the server agree.
+export function normalizeAngle(a) {
+  let n = ((a % 360) + 360) % 360;
+  if (n > 180) n -= 360;
+  return n;
+}
+
 // --- Cannon geometry ---
 
 export function cannonTip(planet, angleDeg) {
@@ -42,15 +49,26 @@ export function cannonBase(planet, angleDeg) {
 }
 
 // --- Deterministic simulation ---
-// Runs the full shot to completion synchronously.
-// Returns { trail: [{x,y}...], hit: bool, hitWhat: string, hitPlanetIndex: int|null }
+// The single source of truth for a shot. Clients animate by replaying `path`,
+// the CPU player searches with it, and the server scores with it — so all three
+// always agree. No Math.random() anywhere in here.
 //
-// Both clients call this with identical (planets, angle, power, shooterPlayer)
-// and get identical results — no Math.random() anywhere in here.
+// Returns {
+//   hit, hitWhat ("HIT!" | "self" | "planet" | "lost"), hitPlanetIndex,
+//   path: [x0, y0, x1, y1, ...]   full flight (only when opts.record !== false)
+//   trail: [{x, y}]               last MAX_TRAIL points, for faded history trails
+//   steps, wraps,
+//   closest: { dist, x, y, step } nearest approach to the opponent's surface
+//   impact: { x, y } | null
+// }
 
-export function simulateShot(planets, angle, power, shooterPlayer) {
+export function simulateShot(planets, angle, power, shooterPlayer, opts = {}) {
+  const record = opts.record !== false;
+  const maxSteps = opts.maxSteps ?? MAX_SIM_STEPS;
+
   const me = planets.find((p) => p.player === shooterPlayer);
   const opponent = shooterPlayer === 1 ? 2 : 1;
+  const oppIndex = planets.findIndex((p) => p.player === opponent);
   const tip = cannonTip(me, angle);
   const rad = (angle * Math.PI) / 180;
   const speed = (power / 100) * MISSILE_SPEED_FACTOR;
@@ -60,150 +78,84 @@ export function simulateShot(planets, angle, power, shooterPlayer) {
   let vx = Math.cos(rad) * speed;
   let vy = Math.sin(rad) * speed;
 
-  const trail = [{ x: mx, y: my }];
+  const path = record ? [mx, my] : null;
+  const closest = { dist: Infinity, x: mx, y: my, step: 0 };
   let steps = 0;
+  let wraps = 0;
 
-  while (steps < MAX_SIM_STEPS) {
-    for (let sub = 0; sub < SIM_SUBSTEPS; sub++) {
-      let ax = 0;
-      let ay = 0;
+  const finish = (hit, hitWhat, hitPlanetIndex, impact) => {
+    let trail = [];
+    if (record) {
+      const n = path.length / 2;
+      for (let i = Math.max(0, n - MAX_TRAIL); i < n; i++) {
+        trail.push({ x: path[i * 2], y: path[i * 2 + 1] });
+      }
+    }
+    return { hit, hitWhat, hitPlanetIndex, path, trail, steps, wraps, closest, impact };
+  };
 
-      for (let pi = 0; pi < planets.length; pi++) {
-        const p = planets[pi];
-        const { dx, dy } = wrappedDelta(mx, my, p.x, p.y);
-        const distSq = dx * dx + dy * dy;
-        const dist = Math.sqrt(distSq);
+  while (steps < maxSteps) {
+    let ax = 0;
+    let ay = 0;
 
-        // Collision check
-        if (dist < p.radius + PLANET_HIT_BONUS) {
-          trail.push({ x: mx, y: my });
-          if (p.player === opponent) {
-            return { trail, hit: true, hitWhat: "HIT!", hitPlanetIndex: pi };
-          } else {
-            const what = p.player === shooterPlayer ? "self" : "planet";
-            return { trail, hit: false, hitWhat: what, hitPlanetIndex: pi };
-          }
+    for (let pi = 0; pi < planets.length; pi++) {
+      const p = planets[pi];
+      const { dx, dy } = wrappedDelta(mx, my, p.x, p.y);
+      const distSq = dx * dx + dy * dy;
+      const dist = Math.sqrt(distSq);
+
+      if (pi === oppIndex) {
+        const surf = dist - p.radius - PLANET_HIT_BONUS;
+        if (surf < closest.dist) {
+          closest.dist = Math.max(0, surf);
+          closest.x = mx;
+          closest.y = my;
+          closest.step = steps;
         }
-
-        // Gravity with distance clamp
-        const force = (G * p.mass) / Math.max(distSq, MIN_GRAV_DIST * MIN_GRAV_DIST);
-        ax += (force * dx) / dist;
-        ay += (force * dy) / dist;
       }
 
-      vx += ax * DT;
-      vy += ay * DT;
-      mx += vx;
-      my += vy;
+      // Collision
+      if (dist < p.radius + PLANET_HIT_BONUS) {
+        const impact = { x: mx, y: my };
+        if (p.player === opponent) return finish(true, "HIT!", pi, impact);
+        return finish(false, p.player === shooterPlayer ? "self" : "planet", pi, impact);
+      }
 
-      // Wrap
+      // Gravity with distance clamp
+      const force = (G * p.mass) / Math.max(distSq, MIN_GRAV_DIST * MIN_GRAV_DIST);
+      ax += (force * dx) / dist;
+      ay += (force * dy) / dist;
+    }
+
+    vx += ax * DT;
+    vy += ay * DT;
+    mx += vx;
+    my += vy;
+
+    if (mx < 0 || mx >= CANVAS_W || my < 0 || my >= CANVAS_H) {
       const w = wrapCoord(mx, my);
       mx = w.x;
       my = w.y;
-
-      trail.push({ x: mx, y: my });
-      if (trail.length > MAX_TRAIL) trail.shift();
-
-      steps++;
-      if (steps >= MAX_SIM_STEPS) {
-        return { trail, hit: false, hitWhat: "lost", hitPlanetIndex: null };
-      }
-    }
-  }
-
-  return { trail, hit: false, hitWhat: "lost", hitPlanetIndex: null };
-}
-
-// --- Animated simulation (for client rendering) ---
-// Runs the sim step-by-step via requestAnimationFrame so players see the
-// missile fly. Calls onStep(simState) each frame and onComplete(result) at end.
-
-export function animateShot(planets, angle, power, shooterPlayer, onStep, onComplete) {
-  const me = planets.find((p) => p.player === shooterPlayer);
-  const opponent = shooterPlayer === 1 ? 2 : 1;
-  const tip = cannonTip(me, angle);
-  const rad = (angle * Math.PI) / 180;
-  const speed = (power / 100) * MISSILE_SPEED_FACTOR;
-
-  const sim = {
-    mx: tip.x,
-    my: tip.y,
-    vx: Math.cos(rad) * speed,
-    vy: Math.sin(rad) * speed,
-    active: true,
-    trail: [{ x: tip.x, y: tip.y }],
-    explosion: null,
-    playerFiring: shooterPlayer,
-  };
-
-  let steps = 0;
-
-  function tick() {
-    if (!sim.active) return;
-
-    for (let sub = 0; sub < SIM_SUBSTEPS; sub++) {
-      let ax = 0;
-      let ay = 0;
-
-      for (let pi = 0; pi < planets.length; pi++) {
-        const p = planets[pi];
-        const { dx, dy } = wrappedDelta(sim.mx, sim.my, p.x, p.y);
-        const distSq = dx * dx + dy * dy;
-        const dist = Math.sqrt(distSq);
-
-        if (dist < p.radius + PLANET_HIT_BONUS) {
-          sim.active = false;
-          sim.explosion = { x: sim.mx, y: sim.my, frame: 0, radius: p.radius * 0.6 };
-
-          const hit = p.player === opponent;
-          const hitWhat = hit ? "HIT!" : p.player === shooterPlayer ? "self" : "planet";
-          onStep({ ...sim });
-          onComplete({
-            trail: [...sim.trail],
-            hit,
-            hitWhat,
-            hitPlanetIndex: pi,
-            explosion: sim.explosion,
-          });
-          return;
-        }
-
-        const force = (G * p.mass) / Math.max(distSq, MIN_GRAV_DIST * MIN_GRAV_DIST);
-        ax += (force * dx) / dist;
-        ay += (force * dy) / dist;
-      }
-
-      sim.vx += ax * DT;
-      sim.vy += ay * DT;
-      sim.mx += sim.vx;
-      sim.my += sim.vy;
-
-      const w = wrapCoord(sim.mx, sim.my);
-      sim.mx = w.x;
-      sim.my = w.y;
-
-      sim.trail.push({ x: sim.mx, y: sim.my });
-      if (sim.trail.length > MAX_TRAIL) sim.trail.shift();
-
-      steps++;
-      if (steps >= MAX_SIM_STEPS) {
-        sim.active = false;
-        onStep({ ...sim });
-        onComplete({
-          trail: [...sim.trail],
-          hit: false,
-          hitWhat: "lost",
-          hitPlanetIndex: null,
-          explosion: null,
-        });
-        return;
-      }
+      wraps++;
     }
 
-    onStep({ ...sim });
-    requestAnimationFrame(tick);
+    if (record) path.push(mx, my);
+    steps++;
   }
 
-  requestAnimationFrame(tick);
-  return sim; // caller can read sim.active to check if still running
+  return finish(false, "lost", null, null);
 }
+
+// Speed of the missile at a given path index (pixels per step), for audio/FX.
+export function pathSpeed(path, i) {
+  if (i < 1) return 0;
+  let dx = path[i * 2] - path[i * 2 - 2];
+  let dy = path[i * 2 + 1] - path[i * 2 - 1];
+  if (Math.abs(dx) > CANVAS_W / 2) dx -= Math.sign(dx) * CANVAS_W;
+  if (Math.abs(dy) > CANVAS_H / 2) dy -= Math.sign(dy) * CANVAS_H;
+  return Math.hypot(dx, dy);
+}
+
+// Steps of simulated time rendered per animation frame at normal speed.
+// Matches the original feel (10 substeps per 60 Hz frame).
+export const STEPS_PER_SECOND = SIM_SUBSTEPS * 60;

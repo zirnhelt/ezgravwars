@@ -1,255 +1,266 @@
-// GameRoom Durable Object
-// Manages a single game room: player connections, turn validation, state sync.
-// Does NOT run physics — clients simulate deterministically from shared inputs.
+// GameRoom Durable Object — one per match.
+//
+// The server is the referee: when a player fires, it runs the same
+// deterministic simulateShot() the clients use, applies the shared match
+// rules, and broadcasts the shot together with the resulting state. Clients
+// animate the shot locally and adopt that state when the animation ends, so
+// there is no client "report" step to get stuck on (or to cheat with).
+//
+// Uses the WebSocket Hibernation API. The object can be evicted from memory
+// between messages while sockets stay open, so nothing lives only in memory:
+// the game is in storage and connected players are found with
+// state.getWebSockets(tag).
 
-const MIN_POWER = 20;
-const MAX_POWER = 100;
-const VALID_HIT_RESULTS = new Set(["HIT!", "lost", "self", "planet"]);
+import { simulateShot } from "../src/game/physics.js";
+import { generateLevel } from "../src/game/levelgen.js";
+import { applyShot, newMatchState } from "../src/game/rules.js";
+import { MIN_POWER, MAX_POWER } from "../src/game/constants.js";
+
+const IDLE_TTL_MS = 60 * 60 * 1000; // delete a room an hour after everyone leaves
+
+function randomSeed() {
+  const buf = new Uint32Array(1);
+  crypto.getRandomValues(buf);
+  return (buf[0] % 2147483646) + 1;
+}
 
 export class GameRoom {
   constructor(state, env) {
     this.state = state;
     this.env = env;
-    this.sessions = new Map(); // playerId -> WebSocket
     this.game = null;
   }
 
-  async initialize() {
-    this.game = await this.state.storage.get("game");
+  async load() {
+    if (!this.game) this.game = (await this.state.storage.get("game")) ?? null;
+    return this.game;
+  }
+
+  async save() {
+    await this.state.storage.put("game", this.game);
   }
 
   async fetch(request) {
     const url = new URL(request.url);
-
-    // POST /create — initialize a new room
-    if (request.method === "POST" && url.pathname.endsWith("/create")) {
-      return this.handleCreate(request);
-    }
-
-    // POST /join — second player joins
-    if (request.method === "POST" && url.pathname.endsWith("/join")) {
-      return this.handleJoin(request);
-    }
-
-    // GET /ws — WebSocket upgrade
-    if (url.pathname.endsWith("/ws")) {
-      return this.handleWebSocket(request);
-    }
-
+    if (request.method === "POST" && url.pathname.endsWith("/create")) return this.handleCreate(request, url);
+    if (request.method === "POST" && url.pathname.endsWith("/join")) return this.handleJoin();
+    if (url.pathname.endsWith("/ws")) return this.handleWebSocket(request, url);
     return new Response("Not found", { status: 404 });
   }
 
-  async handleCreate(request) {
-    // Use cryptographically secure random seed
-    const buf = new Uint32Array(1);
-    crypto.getRandomValues(buf);
-    const seed = buf[0] % 2147483647;
+  // --- HTTP ---
 
+  async handleCreate(request, url) {
+    await this.load();
+    if (this.game) return new Response("Room code in use", { status: 409 });
+    const body = await request.json().catch(() => ({}));
+    const seed = randomSeed();
     this.game = {
-      seed,
-      level: 1,
-      scores: [0, 0],
-      turn: 1,
-      players: { 1: "waiting" },
+      ...newMatchState(seed, body?.targetScore),
+      roomId: url.searchParams.get("code") || this.state.id.toString(),
       status: "waiting",
-      shotHistory: [],
+      players: { 1: true },
+      shotCount: 0,
+      rematch: { 1: false, 2: false },
     };
-    await this.state.storage.put("game", this.game);
-    return Response.json({ roomId: this.state.id.toString(), playerId: 1, seed });
+    await this.save();
+    await this.state.storage.setAlarm(Date.now() + IDLE_TTL_MS);
+    return Response.json({ roomId: this.game.roomId, playerId: 1, seed, targetScore: this.game.targetScore });
   }
 
-  async handleJoin(request) {
-    if (!this.game) await this.initialize();
-    if (!this.game) {
-      return new Response("Room not found", { status: 404 });
-    }
-    if (this.game.players[2]) {
-      return new Response("Room full", { status: 409 });
-    }
+  async handleJoin() {
+    await this.load();
+    if (!this.game) return new Response("Room not found", { status: 404 });
+    if (this.game.players[2]) return new Response("Room full", { status: 409 });
 
-    this.game.players[2] = "waiting";
+    this.game.players[2] = true;
     this.game.status = "playing";
-    await this.state.storage.put("game", this.game);
-
-    this.broadcast({ type: "player_joined", data: { status: "playing" } });
-
-    return Response.json({ roomId: this.state.id.toString(), playerId: 2, seed: this.game.seed });
+    await this.save();
+    this.broadcastState();
+    return Response.json({ roomId: this.game.roomId, playerId: 2, seed: this.game.seed, targetScore: this.game.targetScore });
   }
 
-  async handleWebSocket(request) {
-    if (!this.game) await this.initialize();
-
-    const url = new URL(request.url);
-    const playerId = parseInt(url.searchParams.get("player"));
-
-    if (!this.game) {
-      return new Response("Room not found", { status: 404 });
+  async handleWebSocket(request, url) {
+    if (request.headers.get("Upgrade") !== "websocket") {
+      return new Response("Expected WebSocket", { status: 426 });
     }
-
-    if (playerId !== 1 && playerId !== 2) {
-      return new Response("Invalid player", { status: 400 });
-    }
+    await this.load();
+    const playerId = parseInt(url.searchParams.get("player"), 10);
+    if (playerId !== 1 && playerId !== 2) return new Response("Invalid player", { status: 400 });
 
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
 
-    const wasReconnect = this.sessions.has(playerId);
+    // Refuse politely over the socket so the client stops reconnecting.
+    const refusal = !this.game
+      ? "This room doesn't exist or has expired."
+      : !this.game.players[playerId]
+      ? "That seat hasn't been claimed. Join with the room link instead."
+      : null;
+    if (refusal) {
+      server.accept();
+      server.send(JSON.stringify({ type: "error", data: { message: refusal, fatal: true } }));
+      server.close(1008, "refused");
+      return new Response(null, { status: 101, webSocket: client });
+    }
 
+    const wasOnline = this.state.getWebSockets(String(playerId)).length > 0;
     this.state.acceptWebSocket(server, [String(playerId)]);
-    this.sessions.set(playerId, server);
-
-    // Cancel cleanup alarm if someone connects
     await this.state.storage.deleteAlarm();
 
-    // Send current state
-    const currentState = {
-      type: "room_state",
-      data: {
-        ...this.game,
-        playerId,
-      },
-    };
-    server.send(JSON.stringify(currentState));
-
-    // Notify other player if this was a reconnect
-    if (wasReconnect) {
-      this.broadcast({
-        type: "player_reconnected",
-        data: { player: playerId },
-      });
-    }
+    server.send(JSON.stringify({ type: "room_state", data: this.snapshot(playerId) }));
+    if (!wasOnline) this.broadcast({ type: "presence", data: { online: this.presence() } }, server);
 
     return new Response(null, { status: 101, webSocket: client });
   }
 
+  // --- WebSocket events (hibernation API) ---
+
   async webSocketMessage(ws, message) {
-    if (!this.game) await this.initialize();
+    await this.load();
+    if (!this.game) return;
+    const playerId = this.playerOf(ws);
 
     let msg;
     try {
       msg = JSON.parse(message);
-    } catch (e) {
-      ws.send(JSON.stringify({ type: "error", data: { message: "Invalid message format" } }));
-      return;
+    } catch {
+      return this.sendError(ws, "Invalid message format");
     }
 
-    // Get player ID from WebSocket tags
-    const tags = this.state.getTags(ws);
-    const playerId = tags && tags.length > 0 ? parseInt(tags[0]) : null;
-
-    switch (msg.type) {
-      case "fire": {
-        const { angle, power } = msg.data ?? {};
-
-        // Validate shot parameters
-        if (
-          !Number.isInteger(angle) || angle < -360 || angle > 360 ||
-          !Number.isInteger(power) || power < MIN_POWER || power > MAX_POWER
-        ) {
-          ws.send(JSON.stringify({ type: "error", data: { message: "Invalid shot parameters" } }));
-          return;
-        }
-
-        // Validate it's actually this player's turn
-        if (playerId !== this.game.turn) {
-          ws.send(JSON.stringify({
-            type: "error",
-            data: { message: "Not your turn" }
-          }));
-          return;
-        }
-
-        // Broadcast to both players
-        this.broadcast({
-          type: "shot_fired",
-          data: { player: this.game.turn, angle, power },
-        });
-        break;
-      }
-
-      case "report_result": {
-        const { hit, hitWhat } = msg.data ?? {};
-
-        // Validate result parameters
-        if (typeof hit !== "boolean" || !VALID_HIT_RESULTS.has(hitWhat)) {
-          ws.send(JSON.stringify({ type: "error", data: { message: "Invalid result parameters" } }));
-          return;
-        }
-
-        // Validate it's the active player reporting
-        if (playerId !== this.game.turn) {
-          ws.send(JSON.stringify({
-            type: "error",
-            data: { message: "Not your turn to report" }
-          }));
-          return;
-        }
-
-        const opponent = this.game.turn === 1 ? 2 : 1;
-
-        if (hit) {
-          this.game.scores[this.game.turn - 1]++;
-          this.game.level++;
-        }
-        this.game.turn = opponent;
-        this.game.shotHistory.push({
-          player: this.game.turn === 1 ? 2 : 1, // the one who just fired
-          result: hitWhat,
-        });
-
-        await this.state.storage.put("game", this.game);
-
-        this.broadcast({
-          type: "shot_result",
-          data: {
-            hit,
-            hitWhat,
-            scores: this.game.scores,
-            level: this.game.level,
-            seed: this.game.seed,
-            turn: this.game.turn,
-          },
-        });
-        break;
-      }
+    switch (msg?.type) {
+      case "fire":
+        return this.handleFire(ws, playerId, msg.data ?? {});
+      case "rematch":
+        return this.handleRematch(playerId);
+      case "ping":
+        ws.send(JSON.stringify({ type: "pong", data: {} }));
+        return;
+      default:
+        return this.sendError(ws, "Unknown message type");
     }
   }
 
-  async webSocketClose(ws) {
-    // Find which player disconnected
-    for (const [playerId, socket] of this.sessions) {
-      if (socket === ws) {
-        this.sessions.delete(playerId);
-        this.broadcast({
-          type: "player_disconnected",
-          data: { player: playerId },
-        });
-        break;
-      }
+  async handleFire(ws, playerId, { angle, power }) {
+    if (
+      !Number.isInteger(angle) || angle < -360 || angle > 360 ||
+      !Number.isInteger(power) || power < MIN_POWER || power > MAX_POWER
+    ) {
+      return this.sendError(ws, "Invalid shot parameters");
     }
+    if (this.game.status !== "playing") return this.sendError(ws, "Match is not in progress");
+    if (playerId !== this.game.turn) return this.sendError(ws, "Not your turn");
 
-    // Set alarm to clean up room after 1 hour of no connections
-    if (this.sessions.size === 0) {
-      const oneHour = 60 * 60 * 1000;
-      await this.state.storage.setAlarm(Date.now() + oneHour);
+    const planets = generateLevel(this.game.seed, this.game.level);
+    const sim = simulateShot(planets, angle, power, playerId, { record: false });
+    this.game = { ...applyShot(this.game, playerId, sim.hit), shotCount: this.game.shotCount + 1 };
+    await this.save();
+
+    const g = this.game;
+    this.broadcast({
+      type: "shot_fired",
+      data: {
+        id: g.shotCount,
+        player: playerId,
+        angle,
+        power,
+        hit: sim.hit,
+        hitWhat: sim.hitWhat,
+        next: { seed: g.seed, level: g.level, scores: g.scores, turn: g.turn, status: g.status, winner: g.winner, targetScore: g.targetScore },
+      },
+    });
+  }
+
+  async handleRematch(playerId) {
+    if (this.game.status !== "finished") return;
+    this.game.rematch = { ...this.game.rematch, [playerId]: true };
+
+    if (this.game.rematch[1] && this.game.rematch[2]) {
+      const { roomId, players, shotCount, targetScore, winner } = this.game;
+      this.game = {
+        ...newMatchState(randomSeed(), targetScore),
+        roomId, players, shotCount,
+        turn: winner === 1 ? 2 : 1, // loser of the last match shoots first
+        rematch: { 1: false, 2: false },
+      };
+      await this.save();
+      this.broadcastState();
+    } else {
+      await this.save();
+      this.broadcast({ type: "rematch_vote", data: { votes: this.game.rematch } });
+    }
+  }
+
+  async webSocketClose(ws, code) {
+    await this.onSocketGone(ws);
+    try { ws.close(code === 1005 || code === 1006 ? 1000 : code, "closing"); } catch { /* already closed */ }
+  }
+
+  async webSocketError(ws) {
+    await this.onSocketGone(ws);
+  }
+
+  async onSocketGone(ws) {
+    const remaining = this.state.getWebSockets().filter((s) => s !== ws);
+    // The departing socket may still be listed during this handler: leave it out.
+    this.broadcast({ type: "presence", data: { online: this.presence(ws) } }, ws);
+    if (remaining.length === 0) {
+      await this.state.storage.setAlarm(Date.now() + IDLE_TTL_MS);
     }
   }
 
   async alarm() {
-    // Clean up room if no one is connected
-    if (this.sessions.size === 0) {
+    if (this.state.getWebSockets().length === 0) {
       await this.state.storage.deleteAll();
+      this.game = null;
     }
   }
 
-  broadcast(msg) {
+  // --- Helpers ---
+
+  playerOf(ws) {
+    const tags = this.state.getTags(ws);
+    return tags && tags.length ? parseInt(tags[0], 10) : null;
+  }
+
+  presence(except) {
+    const on = (p) => this.state.getWebSockets(String(p)).some((s) => s !== except);
+    return { 1: on(1), 2: on(2) };
+  }
+
+  snapshot(playerId) {
+    const g = this.game;
+    return {
+      roomId: g.roomId,
+      playerId,
+      seed: g.seed,
+      level: g.level,
+      scores: g.scores,
+      turn: g.turn,
+      status: g.status,
+      winner: g.winner,
+      targetScore: g.targetScore,
+      shotCount: g.shotCount,
+      rematch: g.rematch,
+      online: this.presence(),
+    };
+  }
+
+  sendError(ws, message) {
+    try { ws.send(JSON.stringify({ type: "error", data: { message } })); } catch { /* gone */ }
+  }
+
+  broadcast(msg, except) {
     const data = JSON.stringify(msg);
-    for (const [playerId, ws] of this.sessions.entries()) {
-      try {
-        ws.send(data);
-      } catch (e) {
-        console.error(`[Broadcast] Failed to send to player ${playerId}:`, e.message);
-      }
+    for (const ws of this.state.getWebSockets()) {
+      if (ws === except) continue;
+      try { ws.send(data); } catch { /* socket closing */ }
+    }
+  }
+
+  broadcastState() {
+    for (const ws of this.state.getWebSockets()) {
+      try { ws.send(JSON.stringify({ type: "room_state", data: this.snapshot(this.playerOf(ws)) })); } catch { /* closing */ }
     }
   }
 }

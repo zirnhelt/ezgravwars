@@ -14,67 +14,66 @@ export class GameClient {
     this.ws = null;
     this.reconnectAttempt = 0;
     this.closed = false;
+    this.timer = null;
   }
 
   connect() {
-    const url = `${WS_URL}/api/rooms/${this.roomId}/ws?player=${this.playerId}`;
+    const url = `${WS_URL}/api/rooms/${encodeURIComponent(this.roomId)}/ws?player=${this.playerId}`;
 
-    this.onStatusChange("connecting");
-    this.ws = new WebSocket(url);
+    this.onStatusChange(this.reconnectAttempt ? "reconnecting" : "connecting");
+    const ws = new WebSocket(url);
+    this.ws = ws;
 
-    this.ws.onopen = () => {
+    ws.onopen = () => {
       this.reconnectAttempt = 0;
       this.onStatusChange("connected");
     };
 
-    this.ws.onmessage = (event) => {
+    ws.onmessage = (event) => {
       try {
-        const msg = JSON.parse(event.data);
-        this.onMessage(msg);
+        this.onMessage(JSON.parse(event.data));
       } catch (e) {
         console.error("Bad message from server:", e);
       }
     };
 
-    this.ws.onclose = () => {
-      if (this.closed) return;
+    ws.onclose = () => {
+      if (this.closed || this.ws !== ws) return;
       this.onStatusChange("disconnected");
       this._reconnect();
-    };
-
-    this.ws.onerror = () => {
-      // onclose will fire after this
     };
   }
 
   send(type, data) {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify({ type, data }));
+      return true;
     }
+    return false;
   }
 
   fire(angle, power) {
-    this.send("fire", { angle, power });
+    return this.send("fire", { angle, power });
   }
 
-  reportResult(hit, hitWhat) {
-    this.send("report_result", { hit, hitWhat });
+  rematch() {
+    return this.send("rematch", {});
   }
 
   _reconnect() {
     if (this.closed) return;
-    const delay = RECONNECT_DELAYS[
-      Math.min(this.reconnectAttempt, RECONNECT_DELAYS.length - 1)
-    ];
+    const delay = RECONNECT_DELAYS[Math.min(this.reconnectAttempt, RECONNECT_DELAYS.length - 1)];
     this.reconnectAttempt++;
     this.onStatusChange("reconnecting");
-    setTimeout(() => {
+    clearTimeout(this.timer);
+    this.timer = setTimeout(() => {
       if (!this.closed) this.connect();
     }, delay);
   }
 
   disconnect() {
     this.closed = true;
+    clearTimeout(this.timer);
     if (this.ws) {
       this.ws.close();
       this.ws = null;
@@ -86,14 +85,37 @@ export class GameClient {
 
 const API_BASE = `${API_URL}/api/rooms`;
 
-export async function createRoom() {
-  const res = await fetch(API_BASE, { method: "POST" });
-  if (!res.ok) throw new Error(`Create room failed: ${res.status}`);
-  return res.json(); // { roomId, playerId, seed }
+export async function createRoom(targetScore) {
+  const res = await fetch(API_BASE, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ targetScore }),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json(); // { roomId, playerId, seed, targetScore }
 }
 
-export async function joinRoom(roomId) {
-  const res = await fetch(`${API_BASE}/${roomId}/join`, { method: "POST" });
-  if (!res.ok) throw new Error(`Join room failed: ${res.status}`);
-  return res.json(); // { roomId, playerId, seed }
+export class JoinError extends Error {
+  constructor(status) {
+    super(status === 404 ? "That room doesn't exist (or has expired)" : status === 409 ? "That room is already full" : `Join failed (HTTP ${status})`);
+    this.status = status;
+  }
+}
+
+// De-duplicates concurrent joins for the same room (React StrictMode runs
+// effects twice in development, and a second join would get "room full").
+const inflight = new Map();
+
+export function joinRoom(roomId) {
+  const key = roomId.toUpperCase();
+  if (!inflight.has(key)) {
+    const p = fetch(`${API_BASE}/${encodeURIComponent(roomId)}/join`, { method: "POST" })
+      .then((res) => {
+        if (!res.ok) throw new JoinError(res.status);
+        return res.json();
+      })
+      .finally(() => setTimeout(() => inflight.delete(key), 5000));
+    inflight.set(key, p);
+  }
+  return inflight.get(key);
 }

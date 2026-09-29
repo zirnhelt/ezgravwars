@@ -1,366 +1,154 @@
-import { useState, useEffect, useRef } from "react";
+import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { createRoom, joinRoom } from "./net/client.js";
-import { WS_URL } from "./config.js";
+import { createRoom } from "./net/client.js";
+import { CPU_LEVELS } from "./game/ai.js";
+import { TARGET_SCORE_OPTIONS } from "./game/rules.js";
+import { sfx } from "./game/audio.js";
+import { loadPrefs, savePrefs, loadRecord } from "./prefs.js";
+import AttractBackground from "./ui/AttractBackground.jsx";
 
-export default function Lobby({ onRoomReady }) {
+export default function Lobby() {
   const navigate = useNavigate();
-  const [mode, setMode] = useState("menu"); // menu | creating | joining | waiting
-  const [roomId, setRoomId] = useState("");
-  const [playerId, setPlayerId] = useState(null);
-  const [seed, setSeed] = useState(null);
-  const [joinInput, setJoinInput] = useState("");
+  const [prefs, setPrefs] = useState(loadPrefs);
+  const [record] = useState(loadRecord);
+  const [joinCode, setJoinCode] = useState("");
+  const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
-  const [copied, setCopied] = useState(false);
-  const wsRef = useRef(null);
 
-  // Set up WebSocket when in waiting mode to listen for player_joined
-  useEffect(() => {
-    if (mode === "waiting" && roomId && playerId) {
-      console.log(`[Lobby Player ${playerId}] Connecting WebSocket...`);
-      const ws = new WebSocket(`${WS_URL}/api/rooms/${roomId}/ws?player=${playerId}`);
+  const update = (patch) => {
+    const next = { ...prefs, ...patch };
+    setPrefs(next);
+    savePrefs(next);
+  };
 
-      ws.onopen = () => {
-        console.log(`[Lobby Player ${playerId}] WebSocket connected`);
-      };
+  const qs = (extra = "") => `to=${prefs.targetScore}${prefs.assist ? "&assist=1" : ""}${extra}`;
 
-      ws.onmessage = (event) => {
-        try {
-          const msg = JSON.parse(event.data);
-          console.log(`[Lobby Player ${playerId}] Received:`, msg.type, msg.data);
+  const go = (path) => {
+    sfx.unlock();
+    navigate(path);
+  };
 
-          // Check if game should start (either from player_joined broadcast or room_state with status=playing)
-          const shouldStart =
-            msg.type === "player_joined" ||
-            (msg.type === "room_state" && msg.data.status === "playing");
-
-          console.log(`[Lobby Player ${playerId}] shouldStart:`, shouldStart,
-            `| msg.type: ${msg.type}`,
-            `| status: ${msg.data?.status}`);
-
-          if (shouldStart) {
-            console.log(`[Lobby Player ${playerId}] Game is ready! Starting...`);
-            ws.close();
-            onRoomReady(roomId, playerId, seed);
-          }
-        } catch (e) {
-          console.error("Bad message:", e);
-        }
-      };
-
-      ws.onerror = (error) => {
-        console.error(`[Lobby Player ${playerId}] WebSocket error:`, error);
-      };
-
-      ws.onclose = () => {
-        console.log(`[Lobby Player ${playerId}] WebSocket closed`);
-      };
-
-      wsRef.current = ws;
-
-      return () => {
-        if (wsRef.current) {
-          wsRef.current.close();
-        }
-      };
-    }
-  }, [mode, roomId, playerId, seed, onRoomReady]);
-
-  const handleCreateRoom = async () => {
-    setMode("creating");
+  const handleCreate = async () => {
+    sfx.unlock();
+    setBusy(true);
     setError(null);
     try {
-      const data = await createRoom();
-      setRoomId(data.roomId);
-      setPlayerId(data.playerId);
-      setSeed(data.seed);
-      // Show waiting screen with room link
-      setMode("waiting");
+      const data = await createRoom(prefs.targetScore);
+      rememberSeat(data.roomId, data.playerId);
+      navigate(`/online/${data.roomId}/${data.playerId}`);
     } catch (err) {
-      setError(`Failed to create room: ${err.message}`);
-      setMode("menu");
+      setError(`Couldn't create a room (${err.message}). Is the game server reachable?`);
+      setBusy(false);
     }
   };
 
-  const handleJoinRoom = async () => {
-    if (!joinInput.trim()) {
-      setError("Please enter a room ID");
+  const handleJoin = (e) => {
+    e.preventDefault();
+    const code = joinCode.trim().toUpperCase();
+    if (!code) {
+      setError("Enter the room code your rival shared");
       return;
     }
-    setMode("joining");
-    setError(null);
-    try {
-      const data = await joinRoom(joinInput.trim());
-      setRoomId(data.roomId);
-      setPlayerId(data.playerId);
-      setSeed(data.seed);
-      // Move to waiting mode so WebSocket can connect and listen for game ready
-      setMode("waiting");
-    } catch (err) {
-      setError(`Failed to join room: ${err.message}`);
-      setMode("menu");
-    }
+    go(`/room/${code}`);
   };
-
-  const copyRoomLink = () => {
-    const link = `${window.location.origin}/room/${roomId}`;
-    navigator.clipboard.writeText(link);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
-
-  if (mode === "waiting") {
-    const roomLink = `${window.location.origin}/room/${roomId}`;
-    return (
-      <div style={{
-        background: "#04040a",
-        minHeight: "100vh",
-        display: "flex",
-        flexDirection: "column",
-        alignItems: "center",
-        justifyContent: "center",
-        fontFamily: "'Courier New', monospace",
-        color: "#ccc",
-        padding: "20px",
-      }}>
-        <div style={{
-          background: "#0a0a14",
-          border: "2px solid #4a9eff",
-          borderRadius: 8,
-          padding: "40px 60px",
-          maxWidth: 600,
-          textAlign: "center",
-        }}>
-          <h1 style={{ color: "#4a9eff", fontSize: 32, margin: "0 0 20px 0", letterSpacing: 3 }}>
-            GRAVITY WARS
-          </h1>
-          <div style={{ fontSize: 18, color: "#aaa", marginBottom: 30 }}>
-            Waiting for opponent...
-          </div>
-          <div style={{
-            background: "#06060e",
-            border: "1px solid #222",
-            borderRadius: 4,
-            padding: 20,
-            marginBottom: 20,
-          }}>
-            <div style={{ fontSize: 11, color: "#555", marginBottom: 8, letterSpacing: 1 }}>
-              SHARE THIS LINK
-            </div>
-            <div style={{
-              background: "#0a0a14",
-              border: "1px solid #333",
-              borderRadius: 3,
-              padding: "10px 15px",
-              fontFamily: "monospace",
-              fontSize: 13,
-              color: "#4a9eff",
-              wordBreak: "break-all",
-              marginBottom: 15,
-            }}>
-              {roomLink}
-            </div>
-            <button
-              onClick={copyRoomLink}
-              style={{
-                background: copied ? "#2a8a2a" : "#4a9eff",
-                color: "#000",
-                border: "none",
-                padding: "10px 30px",
-                borderRadius: 4,
-                fontFamily: "'Courier New', monospace",
-                fontSize: 13,
-                fontWeight: "bold",
-                cursor: "pointer",
-                letterSpacing: 1,
-                transition: "background 0.2s",
-              }}
-            >
-              {copied ? "✓ COPIED!" : "COPY LINK"}
-            </button>
-          </div>
-          <div style={{ fontSize: 11, color: "#555" }}>
-            Room ID: <span style={{ color: "#888" }}>{roomId}</span>
-          </div>
-          <div style={{ fontSize: 10, color: "#333", marginTop: 15 }}>
-            Game will start automatically when opponent joins
-          </div>
-        </div>
-      </div>
-    );
-  }
 
   return (
-    <div style={{
-      background: "#04040a",
-      minHeight: "100vh",
-      display: "flex",
-      flexDirection: "column",
-      alignItems: "center",
-      justifyContent: "center",
-      fontFamily: "'Courier New', monospace",
-      color: "#ccc",
-      padding: "20px",
-    }}>
-      <div style={{
-        background: "#0a0a14",
-        border: "1px solid #151520",
-        borderRadius: 8,
-        padding: "50px 80px",
-        maxWidth: 500,
-        textAlign: "center",
-      }}>
-        <h1 style={{
-          color: "#ddd",
-          fontSize: 42,
-          margin: "0 0 10px 0",
-          letterSpacing: 4,
-          fontWeight: "bold",
-        }}>
-          GRAVITY WARS
-        </h1>
-        <div style={{ fontSize: 13, color: "#555", marginBottom: 50, letterSpacing: 2 }}>
-          MULTIPLAYER ARTILLERY
-        </div>
+    <div className="menu">
+      <AttractBackground />
+      <div className="menu-veil" />
 
-        {mode === "menu" && (
-          <>
-            <button
-              onClick={() => navigate("/local")}
-              style={{
-                background: "#6eff6a",
-                color: "#000",
-                border: "none",
-                padding: "15px 50px",
-                borderRadius: 4,
-                fontFamily: "'Courier New', monospace",
-                fontSize: 16,
-                fontWeight: "bold",
-                cursor: "pointer",
-                width: "100%",
-                marginBottom: 20,
-                letterSpacing: 2,
-              }}
-            >
-              LOCAL GAME (2P)
-            </button>
+      <div className="menu-content">
+        <header className="menu-hero">
+          <h1 className="menu-title">GRAVITY WARS</h1>
+          <p className="menu-tagline">Artillery across curved space. Edges wrap. Gravity always wins.</p>
+        </header>
 
-            <div style={{
-              margin: "20px 0 15px 0",
-              color: "#333",
-              fontSize: 11,
-              letterSpacing: 1,
-            }}>
-              ── ONLINE MULTIPLAYER ──
+        <div className="menu-cards">
+          <section className="menu-card card-cpu">
+            <h2>Solo <span>vs CPU</span></h2>
+            <div className="seg" role="radiogroup" aria-label="CPU rank">
+              {Object.entries(CPU_LEVELS).map(([key, lvl]) => {
+                const r = record[key];
+                return (
+                  <button
+                    key={key}
+                    role="radio"
+                    aria-checked={prefs.difficulty === key}
+                    className={prefs.difficulty === key ? "on" : ""}
+                    onClick={() => update({ difficulty: key })}
+                  >
+                    <strong>{lvl.label}</strong>
+                    <small>{r && r.w + r.l > 0 ? `${r.w}W · ${r.l}L` : lvl.blurb}</small>
+                  </button>
+                );
+              })}
             </div>
-
-            <button
-              onClick={handleCreateRoom}
-              style={{
-                background: "#4a9eff",
-                color: "#000",
-                border: "none",
-                padding: "15px 50px",
-                borderRadius: 4,
-                fontFamily: "'Courier New', monospace",
-                fontSize: 16,
-                fontWeight: "bold",
-                cursor: "pointer",
-                width: "100%",
-                marginBottom: 20,
-                letterSpacing: 2,
-              }}
-            >
-              CREATE GAME
+            <button className="gw-btn gw-btn-primary team-1" onClick={() => go(`/play/cpu?d=${prefs.difficulty}&${qs()}`)}>
+              LAUNCH
             </button>
+          </section>
 
-            <div style={{
-              margin: "15px 0",
-              color: "#333",
-              fontSize: 12,
-              letterSpacing: 1,
-            }}>
-              ── OR ──
-            </div>
+          <section className="menu-card card-local">
+            <h2>Hot seat <span>2 players · 1 screen</span></h2>
+            <p className="menu-copy">Pass the mouse, trade shots, argue about who moved the slider.</p>
+            <button className="gw-btn gw-btn-primary team-3" onClick={() => go(`/play/local?${qs()}`)}>
+              PLAY LOCAL
+            </button>
+          </section>
 
-            <div>
+          <section className="menu-card card-online">
+            <h2>Online duel <span>share a code</span></h2>
+            <button className="gw-btn gw-btn-primary team-2" onClick={handleCreate} disabled={busy}>
+              {busy ? "OPENING ROOM…" : "CREATE ROOM"}
+            </button>
+            <form className="join-row" onSubmit={handleJoin}>
               <input
                 type="text"
-                placeholder="Enter Room ID"
-                value={joinInput}
-                onChange={(e) => setJoinInput(e.target.value)}
-                onKeyPress={(e) => e.key === "Enter" && handleJoinRoom()}
-                style={{
-                  width: "100%",
-                  padding: "12px 15px",
-                  background: "#06060e",
-                  border: "1px solid #222",
-                  borderRadius: 4,
-                  color: "#ccc",
-                  fontFamily: "'Courier New', monospace",
-                  fontSize: 14,
-                  marginBottom: 15,
-                  boxSizing: "border-box",
-                }}
+                inputMode="text"
+                autoCapitalize="characters"
+                spellCheck={false}
+                maxLength={64}
+                placeholder="ROOM CODE"
+                value={joinCode}
+                onChange={(e) => setJoinCode(e.target.value.replace(/\s/g, ""))}
+                aria-label="Room code"
               />
-              <button
-                onClick={handleJoinRoom}
-                style={{
-                  background: "#ff6b4a",
-                  color: "#000",
-                  border: "none",
-                  padding: "15px 50px",
-                  borderRadius: 4,
-                  fontFamily: "'Courier New', monospace",
-                  fontSize: 16,
-                  fontWeight: "bold",
-                  cursor: "pointer",
-                  width: "100%",
-                  letterSpacing: 2,
-                }}
-              >
-                JOIN GAME
-              </button>
-            </div>
-          </>
-        )}
-
-        {mode === "creating" && (
-          <div style={{ fontSize: 16, color: "#4a9eff" }}>
-            Creating room...
-          </div>
-        )}
-
-        {mode === "joining" && (
-          <div style={{ fontSize: 16, color: "#ff6b4a" }}>
-            Joining room...
-          </div>
-        )}
-
-        {error && (
-          <div style={{
-            marginTop: 25,
-            padding: "12px 20px",
-            background: "#2a0a0a",
-            border: "1px solid #aa3333",
-            borderRadius: 4,
-            color: "#ff6666",
-            fontSize: 12,
-          }}>
-            {error}
-          </div>
-        )}
-
-        <div style={{
-          marginTop: 40,
-          fontSize: 10,
-          color: "#333",
-          lineHeight: 1.6,
-        }}>
-          Turn-based artillery with orbital mechanics<br />
-          Toroidal wrapping · Deterministic physics
+              <button className="gw-btn" type="submit">JOIN</button>
+            </form>
+          </section>
         </div>
+
+        <div className="menu-settings">
+          <div className="setting">
+            <span>Match</span>
+            <div className="seg seg-small" role="radiogroup" aria-label="Match length">
+              {TARGET_SCORE_OPTIONS.map((n) => (
+                <button key={n} role="radio" aria-checked={prefs.targetScore === n} className={prefs.targetScore === n ? "on" : ""} onClick={() => update({ targetScore: n })}>
+                  First to {n}
+                </button>
+              ))}
+            </div>
+          </div>
+          <label className="setting toggle">
+            <input type="checkbox" checked={prefs.assist} onChange={(e) => update({ assist: e.target.checked })} />
+            <span>Aim assist <small>(offline modes)</small></span>
+          </label>
+        </div>
+
+        {error && <div className="menu-error" role="alert">{error}</div>}
+
+        <footer className="menu-help">
+          Drag on the field or use ←→ / ↑↓ to aim · Space to fire · Hold Space to fast-forward · M to mute
+        </footer>
       </div>
     </div>
   );
+}
+
+export function rememberSeat(roomId, playerId) {
+  try { sessionStorage.setItem(`gw:seat:${roomId.toUpperCase()}`, String(playerId)); } catch { /* ignore */ }
+}
+
+export function recallSeat(roomId) {
+  try { return Number(sessionStorage.getItem(`gw:seat:${roomId.toUpperCase()}`)) || null; } catch { return null; }
 }

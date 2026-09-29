@@ -1,12 +1,15 @@
-# Gravity Wars — Multiplayer
+# Gravity Wars
 
-Two-player turn-based artillery game with orbital mechanics and toroidal wrapping.
+Turn-based artillery across curved space. Bend shots around planets and black
+holes, wrap them off the edge of the map, and knock out your rival's homeworld.
+
+**Modes:** solo vs CPU (Cadet / Captain / Admiral) · hot seat (2 players, 1 screen) · online duel (share a 5-letter room code).
 
 ## Architecture
 
-- **Static frontend**: Vite + React, deployed to Cloudflare Pages
-- **Multiplayer backend**: Cloudflare Workers + Durable Objects (one DO per game room)
-- **Physics**: Deterministic — both clients simulate from the same seed + inputs, no physics on the server
+- **Static frontend**: Vite + React, canvas renderer, deployed to Cloudflare Pages
+- **Multiplayer backend**: Cloudflare Workers + Durable Objects (one DO per room, WebSocket Hibernation API)
+- **Physics**: Deterministic and shared. The same `simulateShot()` animates shots on clients, powers the CPU's search, and referees online shots on the server.
 
 See `ARCHITECTURE.md` for the full design doc.
 
@@ -14,71 +17,66 @@ See `ARCHITECTURE.md` for the full design doc.
 
 ```
 src/
-  App.jsx              # Main game component (supports local + online modes)
+  App.jsx              # Game screen (local / cpu / online modes), HUD, victory panel
+  Lobby.jsx            # Main menu (attract-mode demo plays behind it)
+  MultiplayerApp.jsx   # Online wrapper: connection, waiting room, rematch votes
+  styles.css           # Design tokens + all UI styles
+  prefs.js             # localStorage prefs + CPU win/loss record
   game/
-    constants.js       # All shared constants
-    physics.js         # Deterministic physics engine + animated sim
-    levelgen.js        # Seeded level generation (mulberry32 PRNG)
-    index.js           # Re-exports
+    constants.js       # Shared constants
+    physics.js         # Deterministic sim: full path, closest approach, wraps
+    levelgen.js        # Seeded level generation (mulberry32), black holes from level 3
+    rules.js           # Match rules (first-to-N), shared with the server
+    ai.js              # CPU opponent
+    view.js            # Canvas engine: playback, particles, transitions
+    art.js             # Procedural planets, black holes, nebula backgrounds
+    audio.js           # Synthesized Web Audio sound effects
+    names.js           # Procedural sector names per level
   net/
-    client.js          # WebSocket client wrapper + HTTP room helpers
+    client.js          # WebSocket client + HTTP room helpers
+  ui/
+    AttractBackground.jsx, icons.jsx
 worker/
-  index.js             # CF Worker entry — routes /api/* to Durable Object
-  game-room.js         # GameRoom Durable Object (skeleton, needs completion)
-wrangler.toml          # Cloudflare Workers config
-ARCHITECTURE.md        # Full architecture/protocol doc
+  index.js             # CF Worker entry — room codes, routes /api/* to the DO
+  game-room.js         # GameRoom Durable Object (referee)
 ```
 
 ## Features
 
-- [x] Game component with deterministic physics
-- [x] Seeded PRNG (mulberry32) for deterministic level generation
-- [x] Physics engine with both sync and async simulation modes
-- [x] Local 2-player hot-seat mode
-- [x] Online multiplayer with turn-based gameplay
-- [x] WebSocket client with automatic reconnection
-- [x] Lobby UI for creating and joining games
-- [x] Shareable room links with copy-to-clipboard
-- [x] Durable Objects for persistent game state
-- [x] Turn validation and room cleanup
-- [x] GitHub Pages deployment support
+- Solo vs CPU with three ranks; wins/losses per rank are remembered, and beating one offers a promotion
+- First-to-3/5/7 matches with an end-of-match stats card and rematch
+- Per-player aim memory, so you can refine your last shot instead of starting over
+- Near-miss markers ("missed by 12px") and slow-motion on finishing blows and close calls
+- Long wandering shots auto-accelerate; hold Space (or press on the field) to fast-forward
+- Black holes from level 3, procedural planet types, per-level nebula palettes and sector names
+- Drag-to-aim (mouse or touch), keyboard controls, optional aim assist in offline modes
+- Responsive, HiDPI canvas; works on phones (best in landscape)
+- Online: short room codes, share sheet on mobile, presence, reconnect-and-resync, rematch
 
-## Key Design Notes
+## Controls
 
-### Determinism
-Both clients MUST produce identical simulations. This means:
-- Level gen uses `createRng(seed + levelNum * 9973)` — never Math.random()
-- Default aim offset uses `createRng(seed + level * 31 + turn * 7)`
-- Physics constants are shared via constants.js
-- The `simulateShot()` function is pure and deterministic
+| Action | Keys | Mouse / touch |
+| --- | --- | --- |
+| Aim | ← → or A D (Shift = 1°) | Drag on the field: direction = angle, distance = power |
+| Power | ↑ ↓ or W S (Shift = 1%) | Drag distance, or the slider |
+| Fire | Space / Enter | FIRE button |
+| Fast-forward | Hold Space or F | Press and hold on the field |
+| Mute | M | Speaker icon |
 
-### Shot Flow (Online)
-1. Active player adjusts angle/power and hits Fire
-2. Client calls `onFire(angle, power)` → sends to server
-3. Client ALSO runs `executeShot()` locally (no waiting for server)
-4. Server broadcasts `shot_fired` to both players
-5. Opponent's client receives `shot_fired` → runs `executeShot()` with same params
-6. Active player sends `report_result` to server
-7. Server updates authoritative state, broadcasts `shot_result`
-8. Both clients transition to next turn
+## Online Protocol (summary)
 
-### Props for Online Mode
-```jsx
-<GravityWars
-  mode="online"
-  myPlayerId={2}          // am I P1 or P2?
-  roomSeed={98765}        // from room creation
-  onFire={(angle, power) => client.fire(angle, power)}
-  incomingShot={lastShot} // set when server sends shot_fired for opponent
-/>
-```
+1. `POST /api/rooms` `{ targetScore }` → `{ roomId: "K7QX2", playerId: 1, seed }`
+2. `POST /api/rooms/:code/join` → `{ playerId: 2 }` and the server broadcasts `room_state`
+3. Active player sends `fire { angle, power }`
+4. The server simulates the shot, applies the rules, and broadcasts
+   `shot_fired { id, player, angle, power, hit, hitWhat, next }`
+5. Both clients animate the shot locally, then adopt `next` (scores, level, turn, status)
 
 ## Local Development
 
 Both servers must run simultaneously:
 
 ```bash
-# Install dependencies
 npm install
 
 # Terminal 1: Frontend dev server
@@ -88,11 +86,15 @@ npm run dev
 npm run worker:dev
 ```
 
-Then open `http://localhost:5173`
+Then open `http://localhost:5173`. Solo and hot-seat modes work without the worker.
 
 ## Deployment
 
 See [DEPLOYMENT.md](./DEPLOYMENT.md) for detailed deployment instructions.
+
+The worker imports the shared game modules from `src/game/`, so a change to
+physics, level generation or rules must be deployed to **both** the worker and
+the frontend (the worker workflow watches those files).
 
 ### Quick Start
 
@@ -101,13 +103,10 @@ See [DEPLOYMENT.md](./DEPLOYMENT.md) for detailed deployment instructions.
    wrangler login
    npm run worker:deploy
    ```
-   Save the output URL (e.g., `https://gravity-wars-api.YOUR_SUBDOMAIN.workers.dev`)
+   Save the output URL (e.g., `https://gravity-wars-worker.YOUR_SUBDOMAIN.workers.dev`)
 
 2. **Configure Frontend**
    - Add worker URL as GitHub secret: `VITE_API_URL`
-   - Update `src/config.js` with your worker URL
 
-3. **Deploy Frontend (GitHub Pages)**
-   - Enable GitHub Pages in repository settings (Source: GitHub Actions)
-   - Push to main branch
-   - Access at `https://YOUR_USERNAME.github.io/ezgravwars/`
+3. **Deploy Frontend**
+   - Push to `main`; Cloudflare Pages (or the GitHub Pages workflow) builds and deploys

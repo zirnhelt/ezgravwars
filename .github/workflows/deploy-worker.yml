@@ -6,6 +6,10 @@ on:
       - main
     paths:
       - 'worker/**'
+      - 'src/game/physics.js'
+      - 'src/game/levelgen.js'
+      - 'src/game/rules.js'
+      - 'src/game/constants.js'
       - 'wrangler.toml'
       - '.github/workflows/deploy-worker.yml'
   workflow_dispatch:

@@ -112,3 +112,10 @@ Frontend will use `http://localhost:8787` for the Worker in dev mode.
 
 ### CORS errors
 - Make sure Worker code has CORS headers (already included in `worker/index.js`)
+- If you set the `ALLOWED_ORIGIN` secret, it must exactly match the site's origin
+  (e.g. `https://ezgravwars.pages.dev`, no trailing slash). It applies to
+  WebSocket upgrades too, so a mismatch shows up as "Reconnecting…" forever.
+
+### Shots resolve differently on the two screens
+- The worker referees shots with the shared modules in `src/game/`. If the
+  frontend and worker were deployed from different commits, redeploy both.

@@ -1,154 +1,149 @@
 import { useState, useEffect, useRef, useCallback } from "react";
+import { useNavigate } from "react-router-dom";
 import { GameClient } from "./net/client.js";
 import GravityWars from "./App.jsx";
+import AttractBackground from "./ui/AttractBackground.jsx";
+import { IconCopy, IconShare } from "./ui/icons.jsx";
+import { sfx } from "./game/audio.js";
 
-export default function MultiplayerApp({ roomId, playerId, seed }) {
-  const [connectionStatus, setConnectionStatus] = useState("connecting");
-  const [gameStatus, setGameStatus] = useState("waiting");
-  const [incomingShot, setIncomingShot] = useState(null);
-  const [turn, setTurn] = useState(1);
-  const [level, setLevel] = useState(1);
-  const [scores, setScores] = useState([0, 0]);
+export default function MultiplayerApp({ roomId, playerId }) {
+  const navigate = useNavigate();
+  const [connection, setConnection] = useState("connecting");
+  const [room, setRoom] = useState(null);
+  const [shot, setShot] = useState(null);
+  const [online, setOnline] = useState({ 1: false, 2: false });
+  const [votes, setVotes] = useState({ 1: false, 2: false });
+  const [fatal, setFatal] = useState(null);
   const clientRef = useRef(null);
 
   const handleMessage = useCallback((msg) => {
-    console.log(`[Player ${playerId}] Received message:`, msg.type, msg.data);
-
+    const d = msg.data || {};
     switch (msg.type) {
-      case "room_state": {
-        // Initial state on connect/reconnect
-        console.log(`[Player ${playerId}] room_state received - status: ${msg.data.status}, turn: ${msg.data.turn}`);
-        setGameStatus(msg.data.status);
-        setTurn(msg.data.turn);
-        setLevel(msg.data.level);
-        setScores(msg.data.scores);
-        console.log(`[Player ${playerId}] State updated - gameStatus will be: ${msg.data.status}`);
+      case "room_state":
+        // Authoritative snapshot (connect, reconnect, opponent joined, rematch).
+        setRoom(d);
+        setOnline(d.online || {});
+        setVotes(d.rematch || { 1: false, 2: false });
         break;
-      }
-
-      case "player_joined": {
-        setGameStatus("playing");
+      case "shot_fired":
+        setShot(d);
         break;
-      }
-
-      case "shot_fired": {
-        // Opponent (or ourselves, echoed back) fired
-        const { player, angle, power } = msg.data;
-        // Set incoming shot, which triggers executeShot in GravityWars
-        setIncomingShot({ player, angle, power, timestamp: Date.now() });
+      case "presence":
+        setOnline(d.online || {});
         break;
-      }
-
-      case "shot_result": {
-        // Server confirms result and updates state
-        const { hit, hitWhat, scores: newScores, level: newLevel, turn: newTurn } = msg.data;
-        setScores(newScores);
-        setLevel(newLevel);
-        setTurn(newTurn);
+      case "rematch_vote":
+        setVotes(d.votes || {});
         break;
-      }
-
-      case "player_disconnected": {
-        // Could show a message to user
-        console.log("Opponent disconnected");
+      case "error":
+        if (d.fatal) setFatal(d.message);
+        else console.warn("[server]", d.message);
         break;
-      }
-
-      case "player_reconnected": {
-        console.log("Opponent reconnected");
-        break;
-      }
-
       default:
-        console.warn("Unknown message type:", msg.type);
+        break;
     }
-  }, [playerId]);
+  }, []);
 
   useEffect(() => {
-    console.log(`[Player ${playerId}] MultiplayerApp mounting - creating GameClient for room ${roomId}`);
-    console.log(`[Player ${playerId}] Initial gameStatus: ${gameStatus}`);
-
-    const client = new GameClient(
-      roomId,
-      playerId,
-      handleMessage,
-      setConnectionStatus
-    );
-
+    const client = new GameClient(roomId, playerId, handleMessage, setConnection);
     clientRef.current = client;
     client.connect();
-
-    return () => {
-      console.log(`[Player ${playerId}] MultiplayerApp unmounting - disconnecting GameClient`);
-      client.disconnect();
-    };
+    return () => client.disconnect();
   }, [roomId, playerId, handleMessage]);
 
-  const handleFire = (angle, power) => {
-    if (clientRef.current) {
-      clientRef.current.fire(angle, power);
-    }
-  };
+  const onFire = useCallback((angle, power) => clientRef.current?.fire(angle, power), []);
+  const onRematch = useCallback(() => clientRef.current?.rematch(), []);
 
-  const handleShotComplete = (result) => {
-    // After shot animation completes on active player's client, report result to server
-    if (turn === playerId && clientRef.current) {
-      clientRef.current.reportResult(result.hit, result.hitWhat);
-    }
-  };
-
-  if (gameStatus === "waiting") {
+  if (fatal) {
     return (
-      <div style={{
-        background: "#04040a",
-        minHeight: "100vh",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        fontFamily: "'Courier New', monospace",
-        color: "#ccc",
-      }}>
-        <div style={{ textAlign: "center" }}>
-          <div style={{ fontSize: 20, color: "#4a9eff", marginBottom: 10 }}>
-            Waiting for opponent...
-          </div>
-          <div style={{ fontSize: 12, color: "#555" }}>
-            Connection: {connectionStatus}
-          </div>
-        </div>
-      </div>
+      <CenterCard>
+        <div className="wait-title" style={{ color: "var(--p2)" }}>Room unavailable</div>
+        <p className="menu-copy">{fatal}</p>
+        <button className="gw-btn gw-btn-primary team-1" onClick={() => navigate("/")}>BACK TO MENU</button>
+      </CenterCard>
     );
   }
 
+  if (!room) {
+    return (
+      <CenterCard>
+        <div className="wait-title">Connecting to room…</div>
+        <p className="menu-copy">{connection === "reconnecting" ? "Retrying — the server may be waking up." : "Establishing uplink."}</p>
+      </CenterCard>
+    );
+  }
+
+  if (room.status === "waiting") {
+    return <WaitingRoom roomId={roomId} targetScore={room.targetScore} onLeave={() => navigate("/")} />;
+  }
+
+  const opponent = playerId === 1 ? 2 : 1;
   return (
-    <div>
-      {connectionStatus !== "connected" && (
-        <div style={{
-          position: "fixed",
-          top: 10,
-          right: 10,
-          background: "#aa3333",
-          color: "#fff",
-          padding: "8px 15px",
-          borderRadius: 4,
-          fontFamily: "'Courier New', monospace",
-          fontSize: 11,
-          zIndex: 1000,
-        }}>
-          {connectionStatus === "reconnecting" ? "Reconnecting..." : "Disconnected"}
+    <>
+      {connection !== "connected" && (
+        <div className="net-pill" role="status">
+          {connection === "reconnecting" || connection === "connecting" ? "Reconnecting…" : "Offline"}
         </div>
       )}
       <GravityWars
         mode="online"
         myPlayerId={playerId}
-        roomSeed={seed}
-        onFire={handleFire}
-        incomingShot={incomingShot}
-        onShotComplete={handleShotComplete}
-        externalTurn={turn}
-        externalLevel={level}
-        externalScores={scores}
+        room={room}
+        incomingShot={shot}
+        onFire={onFire}
+        onRematch={onRematch}
+        rematchVotes={votes}
+        opponentOnline={online[opponent] !== false}
       />
+    </>
+  );
+}
+
+function CenterCard({ children }) {
+  return (
+    <div className="menu">
+      <AttractBackground />
+      <div className="menu-veil" />
+      <div className="wait-card">{children}</div>
     </div>
+  );
+}
+
+function WaitingRoom({ roomId, targetScore, onLeave }) {
+  const [copied, setCopied] = useState(false);
+  const link = `${window.location.origin}/room/${roomId}`;
+  const canShare = typeof navigator !== "undefined" && !!navigator.share;
+
+  const copy = async () => {
+    sfx.unlock();
+    try {
+      await navigator.clipboard.writeText(link);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      window.prompt("Copy this link:", link);
+    }
+  };
+
+  const share = () => {
+    navigator.share({ title: "Gravity Wars", text: `Duel me in Gravity Wars — room ${roomId}`, url: link }).catch(() => {});
+  };
+
+  return (
+    <CenterCard>
+      <div className="wait-title">Waiting for a rival…</div>
+      <p className="menu-copy">Send them the code or the link. The match starts the moment they join.</p>
+      <div className="room-code" aria-label="Room code">{roomId}</div>
+      <div className="room-link">{link}</div>
+      <div className="wait-actions">
+        <button className="gw-btn gw-btn-primary team-2" onClick={copy}>
+          <IconCopy /> {copied ? "COPIED!" : "COPY LINK"}
+        </button>
+        {canShare && (
+          <button className="gw-btn" onClick={share}><IconShare /> SHARE</button>
+        )}
+      </div>
+      <p className="menu-copy small">First to {targetScore} · <button className="linklike" onClick={onLeave}>cancel</button></p>
+      <div className="orbit-loader" aria-hidden="true"><i /></div>
+    </CenterCard>
   );
 }

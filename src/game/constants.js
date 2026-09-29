@@ -26,6 +26,10 @@ export const NEUTRAL_RADIUS_MIN = 30;
 export const NEUTRAL_RADIUS_MAX = 70;
 export const NEUTRAL_MASS_MIN = 150;
 export const NEUTRAL_MASS_MAX = 500;
+export const BLACK_HOLE_RADIUS_MIN = 9;
+export const BLACK_HOLE_RADIUS_MAX = 12;
+export const BLACK_HOLE_MASS_MIN = 320;
+export const BLACK_HOLE_MASS_MAX = 480;
 
 // Controls
 export const MIN_POWER = 20;
