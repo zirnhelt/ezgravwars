@@ -6,7 +6,7 @@
 // there: it slows time for a finishing blow or a near miss, and fast-forwards
 // long wandering orbits so nobody sits through 20 seconds of nothing.
 
-import { CANVAS_W, CANVAS_H, MIN_POWER, MAX_POWER } from "./constants.js";
+import { CANVAS_W, CANVAS_H, MIN_POWER, MAX_POWER, PLAYBACK_SPEED, PLAYBACK_RAMP_DELAY, PLAYBACK_RAMP_MAX } from "./constants.js";
 import { cannonTip, pathSpeed, STEPS_PER_SECOND } from "./physics.js";
 import { TEAM, buildBackground, makeTwinkles, planetStyle, buildPlanetSprite, drawBlackHole } from "./art.js";
 import { sfx as realSfx } from "./audio.js";
@@ -206,7 +206,7 @@ export class GameView {
     pb.elapsed += dt;
 
     let target = 1;
-    if (pb.elapsed > 2.5) target = 1 + Math.min(4, (pb.elapsed - 2.5) * 1.1);
+    if (pb.elapsed > PLAYBACK_RAMP_DELAY) target = 1 + Math.min(PLAYBACK_RAMP_MAX - 1, (pb.elapsed - PLAYBACK_RAMP_DELAY) * 0.5);
     if (this.fastForward) target = Math.max(target, 6);
     const stepsLeft = n - 1 - pb.pos;
     const nearMiss = !sim.hit && sim.closest.dist < 30;
@@ -215,7 +215,7 @@ export class GameView {
     pb.mult += (target - pb.mult) * Math.min(1, dt * (target < pb.mult ? 10 : 3));
 
     const prev = pb.pos;
-    pb.pos = Math.min(n - 1, pb.pos + dt * STEPS_PER_SECOND * pb.mult);
+    pb.pos = Math.min(n - 1, pb.pos + dt * STEPS_PER_SECOND * PLAYBACK_SPEED * pb.mult);
 
     const p = sim.path;
     const rgb = TEAM[pb.shooter].rgb;

@@ -15,6 +15,11 @@ export const MAX_SIM_STEPS = 12000;
 export const MAX_TRAIL = 2000;
 export const EXPLOSION_DURATION = 40;
 export const MAX_SHOT_HISTORY = 8;
+// Shot playback speed as a multiple of real-time sim (1 = SIM_SUBSTEPS steps per 60 Hz frame).
+export const PLAYBACK_SPEED = 0.5;
+// Long flights speed up after this many seconds, to at most this multiple.
+export const PLAYBACK_RAMP_DELAY = 4;
+export const PLAYBACK_RAMP_MAX = 3;
 
 // Level gen
 export const MIN_PLANET_SPACING = 120;
