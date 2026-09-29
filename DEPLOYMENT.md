@@ -63,6 +63,28 @@ After setting the `VITE_API_URL` secret:
 
 OR push a commit to `main` branch to trigger auto-deploy.
 
+### 6. Turn notifications (optional, one-time)
+
+Play-by-mail "your move" notifications use Web Push, which needs a VAPID key
+pair on the worker. Without it everything else works; the bell button just
+hides and players use Nudge.
+
+```bash
+npm run vapid          # prints a key pair and the exact commands below
+echo "<public key>"  | npx wrangler secret put VAPID_PUBLIC_KEY
+echo "<private key>" | npx wrangler secret put VAPID_PRIVATE_KEY
+echo "mailto:you@example.com" | npx wrangler secret put VAPID_SUBJECT
+```
+
+- Keep the private key secret. If you ever rotate the keys, existing
+  subscriptions stop working until players tap the bell again (the client
+  re-subscribes automatically when it notices the key changed).
+- For local dev, put the same three `KEY=value` lines in `.dev.vars`
+  (gitignored).
+- iPhone/iPad: Safari only delivers web push to sites added to the Home
+  Screen (iOS 16.4+). The app ships a manifest and icons so "Add to Home
+  Screen" works; the bell explains this when tapped in plain Safari.
+
 ---
 
 ## Automatic Deployments

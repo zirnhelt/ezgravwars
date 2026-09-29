@@ -6,19 +6,22 @@ import { API_URL, WS_URL } from '../config.js';
 const RECONNECT_DELAYS = [500, 1000, 2000, 4000, 8000];
 
 export class GameClient {
-  constructor(roomId, playerId, onMessage, onStatusChange) {
+  constructor(roomId, playerId, token, onMessage, onStatusChange) {
     this.roomId = roomId;
     this.playerId = playerId;
+    this.token = token;
     this.onMessage = onMessage;
     this.onStatusChange = onStatusChange;
     this.ws = null;
     this.reconnectAttempt = 0;
     this.closed = false;
     this.timer = null;
+    this.visible = typeof document === "undefined" ? true : !document.hidden;
   }
 
   connect() {
-    const url = `${WS_URL}/api/rooms/${encodeURIComponent(this.roomId)}/ws?player=${this.playerId}`;
+    const q = new URLSearchParams({ player: String(this.playerId), token: this.token || "" });
+    const url = `${WS_URL}/api/rooms/${encodeURIComponent(this.roomId)}/ws?${q}`;
 
     this.onStatusChange(this.reconnectAttempt ? "reconnecting" : "connecting");
     const ws = new WebSocket(url);
@@ -27,11 +30,15 @@ export class GameClient {
     ws.onopen = () => {
       this.reconnectAttempt = 0;
       this.onStatusChange("connected");
+      // The server only sends turn notifications to seats nobody is looking at.
+      this.send("visibility", { visible: this.visible });
     };
 
     ws.onmessage = (event) => {
       try {
-        this.onMessage(JSON.parse(event.data));
+        const msg = JSON.parse(event.data);
+        if (msg.type === "error" && msg.data?.fatal) this.closed = true;
+        this.onMessage(msg);
       } catch (e) {
         console.error("Bad message from server:", e);
       }
@@ -56,8 +63,29 @@ export class GameClient {
     return this.send("fire", { angle, power });
   }
 
+  aim(angle, power) {
+    return this.send("aim", { angle, power });
+  }
+
   rematch() {
     return this.send("rematch", {});
+  }
+
+  resign() {
+    return this.send("resign", {});
+  }
+
+  setVisible(visible) {
+    this.visible = visible;
+    this.send("visibility", { visible });
+  }
+
+  subscribePush(subscription) {
+    return this.send("push_subscribe", { subscription });
+  }
+
+  unsubscribePush(endpoint) {
+    return this.send("push_unsubscribe", { endpoint });
   }
 
   _reconnect() {
@@ -92,7 +120,7 @@ export async function createRoom(targetScore) {
     body: JSON.stringify({ targetScore }),
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return res.json(); // { roomId, playerId, seed, targetScore }
+  return res.json(); // { roomId, playerId, seed, targetScore, token }
 }
 
 export class JoinError extends Error {
@@ -112,10 +140,39 @@ export function joinRoom(roomId) {
     const p = fetch(`${API_BASE}/${encodeURIComponent(roomId)}/join`, { method: "POST" })
       .then((res) => {
         if (!res.ok) throw new JoinError(res.status);
-        return res.json();
+        return res.json(); // { roomId, playerId, seed, targetScore, token }
       })
       .finally(() => setTimeout(() => inflight.delete(key), 5000));
     inflight.set(key, p);
   }
   return inflight.get(key);
+}
+
+// Summary of a match for the "My games" list. Resolves to { gone: true } when
+// the room has expired or the seat is no longer ours.
+export async function roomStatus({ code, playerId, token }) {
+  const q = new URLSearchParams({ player: String(playerId), token: token || "" });
+  const res = await fetch(`${API_BASE}/${encodeURIComponent(code)}/status?${q}`);
+  if (res.status === 404 || res.status === 403) return { gone: true };
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+export async function resignRoom({ code, playerId, token }) {
+  const q = new URLSearchParams({ player: String(playerId), token: token || "" });
+  await fetch(`${API_BASE}/${encodeURIComponent(code)}/resign?${q}`, { method: "POST" });
+}
+
+let pushKey;
+export function getPushKey() {
+  if (pushKey === undefined) {
+    pushKey = fetch(`${API_URL}/api/push/key`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => d?.publicKey ?? null)
+      .catch(() => {
+        pushKey = undefined; // retry next time
+        return null;
+      });
+  }
+  return pushKey;
 }

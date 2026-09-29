@@ -3,7 +3,7 @@
 Turn-based artillery across curved space. Bend shots around planets and black
 holes, wrap them off the edge of the map, and knock out your rival's homeworld.
 
-**Modes:** solo vs CPU (Cadet / Captain / Admiral) · hot seat (2 players, 1 screen) · online duel (share a 5-letter room code).
+**Modes:** solo vs CPU (Cadet / Captain / Admiral) · hot seat (2 players, 1 screen) · online duel (share a 5-letter room code), live or play-by-mail.
 
 ## Architecture
 
@@ -22,6 +22,8 @@ src/
   MultiplayerApp.jsx   # Online wrapper: connection, waiting room, rematch votes
   styles.css           # Design tokens + all UI styles
   prefs.js             # localStorage prefs + CPU win/loss record
+  games.js             # "Your games": seats (tokens) this browser holds
+  push.js              # Service worker + Push API subscription helpers
   game/
     constants.js       # Shared constants
     physics.js         # Deterministic sim: full path, closest approach, wraps
@@ -38,7 +40,13 @@ src/
     AttractBackground.jsx, icons.jsx
 worker/
   index.js             # CF Worker entry — room codes, routes /api/* to the DO
-  game-room.js         # GameRoom Durable Object (referee)
+  game-room.js         # GameRoom Durable Object (referee, play-by-mail, push triggers)
+  push.js              # Web Push sender: RFC 8291 encryption + VAPID, WebCrypto only
+public/
+  sw.js                # Service worker: shows turn notifications, opens the match on click
+  manifest.webmanifest, icons/
+scripts/
+  vapid-keys.mjs       # `npm run vapid` — generate push keys
 ```
 
 ## Features
@@ -52,6 +60,23 @@ worker/
 - Drag-to-aim (mouse or touch), keyboard controls, optional aim assist in offline modes
 - Responsive, HiDPI canvas; works on phones (best in landscape)
 - Online: short room codes, share sheet on mobile, presence, reconnect-and-resync, rematch
+- **Live rival aim:** watch your rival's turret, launch vector and power move as they line up
+- **Play by mail:** take turns whenever. Matches live for 30 days without moves; **Your games** on
+  the menu shows which ones are waiting on you; the shot you missed replays when you come back;
+  opt-in push notifications ("Your move") or a one-tap **Nudge** to text your rival; a private
+  link moves your seat to another device; resign from the game or the list
+
+## Play by mail
+
+Every online match works both ways: live if you're both there, turn-by-turn if you're not.
+
+- Create a room and leave; it waits a week for your rival to join.
+- Each seat has a secret token stored in this browser (`localStorage`), so only you can move for
+  your side. The devices button copies a private link to continue on another device.
+- The bell turns on "your move" notifications for that match on that device. On iPhone/iPad,
+  Safari only allows this after **Share → Add to Home Screen** (the site is installable).
+- Notifications need VAPID keys on the worker (see [DEPLOYMENT.md](./DEPLOYMENT.md)). Without
+  them the bell hides and players use Nudge instead.
 
 ## Controls
 
@@ -65,12 +90,17 @@ worker/
 
 ## Online Protocol (summary)
 
-1. `POST /api/rooms` `{ targetScore }` → `{ roomId: "K7QX2", playerId: 1, seed }`
-2. `POST /api/rooms/:code/join` → `{ playerId: 2 }` and the server broadcasts `room_state`
-3. Active player sends `fire { angle, power }`
-4. The server simulates the shot, applies the rules, and broadcasts
-   `shot_fired { id, player, angle, power, hit, hitWhat, next }`
-5. Both clients animate the shot locally, then adopt `next` (scores, level, turn, status)
+1. `POST /api/rooms` `{ targetScore }` → `{ roomId: "K7QX2", playerId: 1, seed, token }`
+2. `POST /api/rooms/:code/join` → `{ playerId: 2, token }` and the server broadcasts `room_state`
+3. Both connect `GET /api/rooms/:code/ws?player=N&token=…`
+4. While aiming, the active player streams `aim { angle, power }` (relayed, never stored)
+5. Active player sends `fire { angle, power }`
+6. The server simulates the shot, applies the rules, and broadcasts
+   `shot_fired { id, player, angle, power, hit, hitWhat, next }`, then pushes a notification
+   to the other seat if nobody is looking at it
+7. Both clients animate the shot locally, then adopt `next` (scores, level, turn, status)
+
+Full message list in [ARCHITECTURE.md](./ARCHITECTURE.md).
 
 ## Local Development
 

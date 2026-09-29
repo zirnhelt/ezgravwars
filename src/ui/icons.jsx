@@ -20,6 +20,22 @@ export const IconCopy = () => (
   <svg {...base}><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15V6a2 2 0 0 1 2-2h9" /></svg>
 );
 
+export const IconBell = () => (
+  <svg {...base}><path d="M6 16V11a6 6 0 0 1 12 0v5l2 2H4l2-2z" /><path d="M10 20a2 2 0 0 0 4 0" /></svg>
+);
+
+export const IconBellOff = () => (
+  <svg {...base}><path d="M6 16V11a6 6 0 0 1 9.5-4.9M18 11v5l2 2H8" /><path d="M10 20a2 2 0 0 0 4 0" /><path d="M3 3l18 18" /></svg>
+);
+
+export const IconFlag = () => (
+  <svg {...base}><path d="M5 21V4" /><path d="M5 4h11l-2 4 2 4H5" /></svg>
+);
+
+export const IconDevices = () => (
+  <svg {...base}><rect x="2" y="5" width="13" height="10" rx="1.5" /><path d="M6 19h5" /><rect x="17" y="8" width="5" height="11" rx="1" /></svg>
+);
+
 export const IconShare = () => (
   <svg {...base}><circle cx="18" cy="5" r="2.5" /><circle cx="6" cy="12" r="2.5" /><circle cx="18" cy="19" r="2.5" /><path d="M8.2 10.8l7.6-4.4M8.2 13.2l7.6 4.4" /></svg>
 );

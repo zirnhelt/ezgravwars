@@ -2,6 +2,8 @@
 // Routes /api/* requests to the GameRoom Durable Object.
 // Static assets are served by Cloudflare Pages.
 
+import { pushConfigured } from "./push.js";
+
 export { GameRoom } from "./game-room.js";
 
 // CORS origin check — set ALLOWED_ORIGIN env var in production (wrangler secret).
@@ -99,12 +101,21 @@ export default {
       return addResponseHeaders(new Response("Could not allocate a room code", { status: 503 }), origin, env);
     }
 
-    // POST /api/rooms/:id/join
-    const joinMatch = url.pathname.match(/^\/api\/rooms\/([^/]+)\/join$/);
-    if (request.method === "POST" && joinMatch) {
-      const stub = roomStub(env, joinMatch[1]);
+    // GET /api/push/key — VAPID public key for turn notifications (404 = disabled)
+    if (request.method === "GET" && url.pathname === "/api/push/key") {
+      const res = pushConfigured(env)
+        ? Response.json({ publicKey: env.VAPID_PUBLIC_KEY })
+        : new Response("Push not configured", { status: 404 });
+      return addResponseHeaders(res, origin, env);
+    }
+
+    // POST /api/rooms/:id/join · GET /api/rooms/:id/status · POST /api/rooms/:id/resign
+    const roomMatch = url.pathname.match(/^\/api\/rooms\/([^/]+)\/(join|status|resign)$/);
+    const allowed = { join: "POST", status: "GET", resign: "POST" };
+    if (roomMatch && request.method === allowed[roomMatch[2]]) {
+      const stub = roomStub(env, roomMatch[1]);
       if (!stub) return notFound();
-      const response = await stub.fetch(new Request(url.origin + "/join", { method: "POST" }));
+      const response = await stub.fetch(new Request(`${url.origin}/${roomMatch[2]}${url.search}`, { method: request.method }));
       return addResponseHeaders(response, origin, env);
     }
 

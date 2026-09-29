@@ -239,20 +239,6 @@ button, input { font: inherit; color: inherit; }
   to { opacity: 1; transform: translate(-50%, 0) scale(1); filter: blur(0); }
 }
 
-.gw-toast {
-  position: absolute;
-  top: 12px;
-  left: 50%;
-  transform: translateX(-50%);
-  background: rgba(70, 20, 20, 0.88);
-  border: 1px solid rgba(255, 107, 74, 0.6);
-  color: #ffd6c9;
-  font-size: 12px;
-  padding: 6px 14px;
-  border-radius: 999px;
-  white-space: nowrap;
-}
-
 .gw-log {
   position: absolute;
   right: 10px;
@@ -651,6 +637,89 @@ button, input { font: inherit; color: inherit; }
   box-shadow: 0 0 10px var(--p2);
 }
 @keyframes spin { to { transform: rotate(360deg); } }
+
+/* ---------- Play by mail ---------- */
+
+.your-games {
+  width: min(640px, 100%);
+  padding: 14px 16px;
+  border-radius: 16px;
+  background: var(--panel);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid var(--line);
+}
+.your-games h2 {
+  margin: 0 0 8px;
+  font-family: var(--display);
+  font-size: 12px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.your-games ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.your-games li { display: flex; align-items: stretch; gap: 6px; }
+.yg-open {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 5.5em 1fr auto;
+  grid-template-areas: "code state ago" "code score ago";
+  align-items: center;
+  column-gap: 12px;
+  padding: 8px 12px;
+  text-align: left;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.03);
+  cursor: pointer;
+}
+.yg-open:hover:not(:disabled) { border-color: rgba(255, 255, 255, 0.3); }
+.yg-open:disabled { cursor: default; opacity: 0.55; }
+.yg-code { grid-area: code; font-family: var(--display); font-weight: 800; letter-spacing: 0.18em; font-size: 14px; }
+.yg-state { grid-area: state; font-size: 12px; }
+.yg-score { grid-area: score; font-size: 11px; color: var(--muted); }
+.yg-ago { grid-area: ago; font-size: 10px; color: var(--faint); }
+.your-games li.your-move .yg-open {
+  border-color: var(--p1);
+  background: rgba(74, 158, 255, 0.1);
+  box-shadow: 0 0 22px -6px rgba(74, 158, 255, 0.7);
+}
+.your-games li.your-move .yg-state { color: var(--p1-light); font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; }
+.your-games li.won .yg-state { color: #5dff9a; }
+.your-games li.muted .yg-state { color: var(--faint); }
+.yg-remove {
+  width: 34px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--faint);
+  font-size: 16px;
+  cursor: pointer;
+}
+.yg-remove:hover { color: var(--p2-light); border-color: rgba(255, 107, 74, 0.5); }
+
+.remote-note { font-size: 11px; color: var(--muted); }
+.wait-bell .gw-icon { width: 42px; height: 42px; }
+
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 22px;
+  transform: translateX(-50%);
+  z-index: 60;
+  max-width: min(520px, calc(100% - 32px));
+  padding: 10px 16px;
+  border-radius: 12px;
+  font-size: 12px;
+  line-height: 1.45;
+  text-align: center;
+  color: var(--ink);
+  background: rgba(14, 16, 34, 0.95);
+  border: 1px solid var(--line);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
+  animation: fade-in 0.25s ease both;
+}
 
 .net-pill {
   position: fixed;

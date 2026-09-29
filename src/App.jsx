@@ -43,11 +43,15 @@ function defaultAim(planets, seed, level, player) {
 //   mode: "local" | "cpu" | "online"
 //   cpuLevel, targetScore, assist        — local/CPU match settings
 //   myPlayerId, room, incomingShot,      — online: server-driven state
-//   onFire(angle, power), onRematch(), rematchVotes, opponentOnline, roomCode
+//   onFire(angle, power), onRematch(), rematchVotes, opponentOnline
+//   rivalAim, onAim(angle, power)        — online: live aim both ways
+//   seenShotId, onShotSeen(id)           — online: replay the shot you missed
+//   onlineTools, remoteNote              — online: extra HUD buttons / status
 export default function GravityWars(props) {
   const {
     mode = "local", cpuLevel = "captain", targetScore = 5, assist = false,
     myPlayerId = null, room = null, incomingShot = null, rematchVotes = null, opponentOnline = true,
+    rivalAim = null,
   } = props;
   const navigate = useNavigate();
   const online = mode === "online";
@@ -58,10 +62,18 @@ export default function GravityWars(props) {
   propsRef.current = props;
 
   // ---- Core state (refs are the source of truth for async flows) ----
+  // Play-by-mail: if the room's last shot happened while we were away, start
+  // from the state before it and replay it, so the returning player sees it.
+  const replayRef = useRef(undefined);
+  if (replayRef.current === undefined) {
+    const ls = online && room && room.status !== "waiting" ? room.lastShot : null;
+    replayRef.current = ls && ls.id > (props.seenShotId ?? 0) ? ls : null;
+  }
   const initialRef = useRef(null);
   if (!initialRef.current) {
+    const r = replayRef.current ? { ...replayRef.current.before, targetScore: room.targetScore } : room;
     initialRef.current = online && room
-      ? { seed: room.seed, level: room.level, scores: [...room.scores], turn: room.turn, status: room.status, winner: room.winner ?? null, targetScore: room.targetScore }
+      ? { seed: r.seed, level: r.level, scores: [...r.scores], turn: r.turn, status: r.status, winner: r.winner ?? null, targetScore: r.targetScore, resignedBy: r.resignedBy ?? null }
       : newMatchState(randomSeed(), targetScore);
   }
   const [game, setGame] = useState(initialRef.current);
@@ -89,9 +101,23 @@ export default function GravityWars(props) {
   const aliveRef = useRef(true);
   const cpuTokenRef = useRef(0);
   const cpuMemRef = useRef({ shotsOnLevel: 0 });
-  const queueRef = useRef([]);
-  // Shots with id <= this are already reflected in the room state we hold.
+  const queueRef = useRef(null);
+  if (!queueRef.current) {
+    const ls = replayRef.current;
+    queueRef.current = ls
+      ? [{
+          ...ls,
+          replay: true,
+          next: { seed: room.seed, level: room.level, scores: room.scores, turn: room.turn, status: room.status, winner: room.winner ?? null, targetScore: room.targetScore, resignedBy: room.resignedBy ?? null },
+        }]
+      : [];
+  }
+  // Shots with id <= this are already reflected in the state we hold.
   const baseShotRef = useRef(online && room ? room.shotCount ?? 0 : 0);
+  const rivalAimRef = useRef(null);
+  const [rivalLive, setRivalLive] = useState(null);
+  const aimSendRef = useRef({ last: 0, timer: null, pending: null });
+  const replayTimerRef = useRef(null);
   const pendingRoomRef = useRef(null);
   const sentTimerRef = useRef(null);
   const lastMissRef = useRef({});
@@ -113,6 +139,31 @@ export default function GravityWars(props) {
     aimsRef.current = { 1: defaultAim(pl, g.seed, g.level, 1), 2: defaultAim(pl, g.seed, g.level, 2) };
     cpuMemRef.current = { shotsOnLevel: 0 };
     lastMissRef.current = {};
+    applyRivalAim();
+  }
+
+  // Live aim from the rival (online). Only applies to the level it was sent
+  // from, so a late message can't point a turret on the wrong map.
+  function applyRivalAim() {
+    const a = rivalAimRef.current;
+    const g = gameRef.current;
+    if (!online || !a || !aimsRef.current || a.seed !== g.seed || a.level !== g.level) return false;
+    aimsRef.current[a.player] = { angle: normalizeAngle(a.angle), power: a.power };
+    return true;
+  }
+
+  // Throttled (~11/s) so dragging doesn't flood the socket.
+  function sendAim(a) {
+    if (!online) return;
+    const s = aimSendRef.current;
+    s.pending = a;
+    if (s.timer) return;
+    s.timer = setTimeout(() => {
+      s.timer = null;
+      s.last = performance.now();
+      if (s.pending && phaseRef.current === "aim") propsRef.current.onAim?.(s.pending.angle, s.pending.power);
+      s.pending = null;
+    }, Math.max(0, 90 - (performance.now() - s.last)));
   }
 
   const setPhaseBoth = (p) => {
@@ -137,7 +188,9 @@ export default function GravityWars(props) {
     const ph = phaseRef.current;
     const human = isHuman(g.turn);
     const a = aimsRef.current[g.turn];
-    const showAim = (ph === "aim" && human) || ph === "cpu";
+    const ra = rivalAimRef.current;
+    const rivalAiming = ph === "remote" && ra && ra.player === g.turn && ra.seed === g.seed && ra.level === g.level;
+    const showAim = (ph === "aim" && human) || ph === "cpu" || rivalAiming;
     let preview = null;
     if (showAim && human && assistRef.current && assistAllowed) {
       preview = simulateShot(planetsRef.current, a.angle, a.power, g.turn, { maxSteps: 160 }).path;
@@ -168,13 +221,17 @@ export default function GravityWars(props) {
     if (isHuman(g.turn)) {
       setAimState({ ...aimsRef.current[g.turn] });
       setPhaseBoth("aim");
+      setRivalLive(null);
       showBanner(online || cpu ? "YOUR TURN" : `PLAYER ${g.turn}`, sub, g.turn, 1800);
       sfx.turn();
+      sendAim(aimsRef.current[g.turn]); // rival sees where we start from
     } else if (cpu) {
       setPhaseBoth("cpu");
       runCpu();
     } else {
       setPhaseBoth("remote");
+      const ra = rivalAimRef.current;
+      setRivalLive(applyRivalAim() && ra.player === g.turn ? { ...aimsRef.current[g.turn] } : null);
     }
     syncView();
     pump();
@@ -216,6 +273,7 @@ export default function GravityWars(props) {
     view.setFastForward(false);
     setFf(false);
     if (!aliveRef.current) return;
+    if (server?.id) propsRef.current.onShotSeen?.(server.id);
 
     recordShot(shooter, angle, power, sim, hit, hitWhat);
     if (cpu && shooter === 2) cpuMemRef.current.shotsOnLevel++;
@@ -308,10 +366,26 @@ export default function GravityWars(props) {
 
   function pump() {
     if (!IDLE_PHASES.has(phaseRef.current)) return;
-    const s = queueRef.current.shift();
+    const s = queueRef.current[0];
     if (s) {
       clearTimeout(sentTimerRef.current);
-      runShot(s.player, s.angle, s.power, { hit: s.hit, hitWhat: s.hitWhat, next: s.next });
+      const server = { id: s.id, hit: s.hit, hitWhat: s.hitWhat, next: s.next };
+      if (!s.replay) {
+        queueRef.current.shift();
+        runShot(s.player, s.angle, s.power, server);
+        return;
+      }
+      // A shot fired while we were away: announce it, then play it back. It
+      // stays queued until it actually runs, so an unmount (or React's dev
+      // double-mount) cancels the timer without losing the replay.
+      setPhaseBoth("incoming");
+      showBanner("WHILE YOU WERE AWAY", `${nameOf(s.player)} fired · ${s.angle}° ${s.power}%`, s.player, 1600);
+      clearTimeout(replayTimerRef.current);
+      replayTimerRef.current = setTimeout(() => {
+        if (!aliveRef.current || queueRef.current[0] !== s) return;
+        queueRef.current.shift();
+        runShot(s.player, s.angle, s.power, server);
+      }, 1500);
       return;
     }
     applyPendingRoom();
@@ -326,7 +400,7 @@ export default function GravityWars(props) {
     const same = g.seed === r.seed && g.level === r.level && g.turn === r.turn && g.status === r.status &&
       g.scores[0] === r.scores[0] && g.scores[1] === r.scores[1];
     if (same) return;
-    const next = { seed: r.seed, level: r.level, scores: [...r.scores], turn: r.turn, status: r.status, winner: r.winner ?? null, targetScore: r.targetScore };
+    const next = { seed: r.seed, level: r.level, scores: [...r.scores], turn: r.turn, status: r.status, winner: r.winner ?? null, targetScore: r.targetScore, resignedBy: r.resignedBy ?? null };
     if (g.status === "finished" && r.status === "playing") {
       resetMatchUi();
       setPhaseBoth("flight");
@@ -357,6 +431,30 @@ export default function GravityWars(props) {
     pump();
   }, [room]);
 
+  useEffect(() => {
+    if (!online || !rivalAim) return;
+    rivalAimRef.current = rivalAim;
+    const g = gameRef.current;
+    if (applyRivalAim() && phaseRef.current === "remote" && rivalAim.player === g.turn) {
+      setRivalLive({ ...aimsRef.current[g.turn] });
+      syncView();
+    }
+  }, [rivalAim]);
+
+  // Tab title flags your move while the tab is in the background.
+  useEffect(() => {
+    if (!online) return;
+    const update = () => {
+      document.title = phase === "aim" && document.hidden ? "● Your move · Gravity Wars" : "Gravity Wars";
+    };
+    update();
+    document.addEventListener("visibilitychange", update);
+    return () => {
+      document.removeEventListener("visibilitychange", update);
+      document.title = "Gravity Wars";
+    };
+  }, [phase, online]);
+
   // ---- Match reset ----
 
   function resetMatchUi() {
@@ -386,6 +484,7 @@ export default function GravityWars(props) {
     aimsRef.current[g.turn] = a;
     setAimState(a);
     syncView();
+    sendAim(a);
   }
 
   function aimAtPointer(e) {
@@ -494,7 +593,8 @@ export default function GravityWars(props) {
     ro.observe(stageRef.current);
 
     actionsRef.current.beginTurn();
-    if (gameRef.current.status !== "finished") {
+    // (A missed-shot replay announces itself; don't cover it with the level banner.)
+    if (gameRef.current.status !== "finished" && phaseRef.current !== "incoming") {
       const g = gameRef.current;
       showBanner(`LEVEL ${g.level}`, sectorName(g.seed, g.level), g.turn, 2000);
     }
@@ -504,6 +604,10 @@ export default function GravityWars(props) {
       cpuTokenRef.current++;
       clearTimeout(sentTimerRef.current);
       clearTimeout(bannerTimerRef.current);
+      clearTimeout(aimSendRef.current.timer);
+      aimSendRef.current.timer = null;
+      clearTimeout(replayTimerRef.current);
+      replayTimerRef.current = null;
       ro.disconnect();
       view.destroy();
       viewRef.current = null;
@@ -523,7 +627,11 @@ export default function GravityWars(props) {
   const status = (() => {
     if (phase === "aim") return online || cpu ? "Your shot — drag on the field or use the sliders" : `Player ${turn}, your shot`;
     if (phase === "cpu") return `${CPU_LEVELS[cpuLevel]?.label ?? "CPU"} is lining up a shot…`;
-    if (phase === "remote") return opponentOnline ? "Rival is aiming…" : "Rival disconnected — waiting for them to return";
+    if (phase === "remote") {
+      if (!opponentOnline) return "Rival is away — they'll take their shot when they're back. Close this anytime.";
+      return rivalLive ? `Rival is aiming · ${rivalLive.angle}° ${rivalLive.power}%` : "Rival is aiming…";
+    }
+    if (phase === "incoming") return "Replaying the shot you missed…";
     if (phase === "sent") return "Transmitting…";
     if (phase === "flight") return ff ? "Fast-forward ▸▸" : "Hold SPACE or press on the field to fast-forward";
     return "";
@@ -566,6 +674,7 @@ export default function GravityWars(props) {
               <IconAssist />
             </button>
           )}
+          {props.onlineTools}
           <button className="gw-icon" onClick={() => { sfx.unlock(); sfx.setMuted(!muted); }} title="Sound (M)" aria-pressed={!muted}>
             {muted ? <IconMute /> : <IconSound />}
           </button>
@@ -592,10 +701,6 @@ export default function GravityWars(props) {
               <div className="gw-banner-title">{banner.title}</div>
               {banner.sub && <div className="gw-banner-sub">{banner.sub}</div>}
             </div>
-          )}
-
-          {online && !opponentOnline && phase !== "over" && (
-            <div className="gw-toast">Rival disconnected — the room stays open for them</div>
           )}
 
           {log.length > 0 && phase !== "over" && (
@@ -658,6 +763,7 @@ export default function GravityWars(props) {
         </button>
         <div className="gw-status">
           <span>{status}</span>
+          {online && phase === "remote" && props.remoteNote}
           <span className="gw-keys">←→ angle · ↑↓ power · shift fine · space fire · M mute</span>
           <span className="gw-rotate-hint">Tip: turn your phone sideways for a bigger battlefield</span>
         </div>
@@ -692,6 +798,7 @@ function VictoryPanel({ game, stats, labels, winnerIsMe, mode, cpuLevel, rematch
         <div className="gw-victory-sub">
           {game.scores[0]} – {game.scores[1]} · first to {game.targetScore}
           {mode === "cpu" && ` · vs ${CPU_LEVELS[cpuLevel].label}`}
+          {game.resignedBy && ` · ${game.resignedBy === myPlayerId ? "you resigned" : "rival resigned"}`}
         </div>
         <table className="gw-stats">
           <thead>

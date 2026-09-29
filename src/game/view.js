@@ -708,7 +708,7 @@ export class GameView {
     const pl = this.planets.find((p) => p.player === player);
     if (!pl) return;
     const team = TEAM[player];
-    const dim = this.idle ? 0.35 : 1;
+    const dim = this.idle ? 0.6 : 1;
 
     // Power gauge around the planet
     const gr = pl.radius + 32;

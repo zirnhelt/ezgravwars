@@ -1,10 +1,12 @@
 import React, { useState, useEffect } from "react";
 import ReactDOM from "react-dom/client";
 import { BrowserRouter, Routes, Route, Navigate, useParams, useNavigate, useSearchParams, useLocation } from "react-router-dom";
-import Lobby, { rememberSeat, recallSeat } from "./Lobby.jsx";
+import Lobby from "./Lobby.jsx";
 import MultiplayerApp from "./MultiplayerApp.jsx";
 import GravityWars from "./App.jsx";
 import { joinRoom } from "./net/client.js";
+import { getGame, saveGame } from "./games.js";
+import { registerServiceWorker } from "./push.js";
 import { CPU_LEVELS } from "./game/ai.js";
 import { clampTargetScore } from "./game/rules.js";
 import { sfx } from "./game/audio.js";
@@ -16,22 +18,26 @@ const unlockAudio = () => sfx.unlock();
 window.addEventListener("pointerdown", unlockAudio, { once: true });
 window.addEventListener("keydown", unlockAudio, { once: true });
 
+// Needed for turn notifications (push) and for installing to a home screen.
+registerServiceWorker();
+
 function RoomRoute() {
   const { roomId } = useParams();
   const navigate = useNavigate();
   const [error, setError] = useState(null);
 
   useEffect(() => {
-    const seat = recallSeat(roomId);
+    // Already seated here (e.g. the invite link again, or a nudge)? Go straight in.
+    const seat = getGame(roomId);
     if (seat) {
-      navigate(`/online/${roomId}/${seat}`, { replace: true });
+      navigate(`/online/${seat.code}/${seat.playerId}`, { replace: true });
       return;
     }
     let cancelled = false;
     joinRoom(roomId)
       .then((data) => {
         if (cancelled) return;
-        rememberSeat(data.roomId, data.playerId);
+        saveGame({ code: data.roomId, playerId: data.playerId, token: data.token, targetScore: data.targetScore });
         navigate(`/online/${data.roomId}/${data.playerId}`, { replace: true });
       })
       .catch((err) => {
